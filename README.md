@@ -1,3 +1,15 @@
+# 🧠 Parameter Golf - The Thinker Strategy
+
+## 🎯 Architecture & Objectives
+This repository contains "The Thinker" variant for the OpenAI Parameter Golf Challenge. Our primary goal is to achieve extremely deep reasoning logic while staying completely within the 16 MB baseline package.
+
+### 🛠️ Key Technical Implementations
+1. **Recursive Layers (Parameter Tying):** The core thesis is that we can squeeze a massive number of layers (and hence reasoning depth) by heavily recycling weights across transformer blocks. We will tie weights globally across the network.
+2. **FP16 Shared Precision:** Because we are tying parameters instead of blindly shrinking them, we can afford to keep them in standard FP16 shared precision while maintaining a tiny footprint.
+3. **Non-Standard Activations:** Utilizing specific non-standard activations like $ReLU^2$ (Squared ReLU) or LeakyReLU to ensure gradient flow remains strong through the massive recursive depth.
+
+Our goal is finding the absolute maximum effective depth via recursive parameter-tying.
+
 <img width="3840" height="1280" alt="1920x640-discord" src="https://github.com/user-attachments/assets/90607b26-171f-476a-90ae-69b9dbb7cb30" />
 
 <br>
