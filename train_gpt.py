@@ -63,6 +63,7 @@ class Hyperparameters:
     vocab_size = int(os.environ.get("VOCAB_SIZE", 1024))
     num_layers = int(os.environ.get("NUM_LAYERS", 9))
     num_kv_heads = int(os.environ.get("NUM_KV_HEADS", 4))
+    use_checkpointing = bool(int(os.environ.get("USE_CHECKPOINTING", "1")))
     model_dim = int(os.environ.get("MODEL_DIM", 512))
     num_heads = int(os.environ.get("NUM_HEADS", 8))
     mlp_mult = int(os.environ.get("MLP_MULT", 2))
@@ -659,8 +660,10 @@ class GPT(nn.Module):
         logit_softcap: float,
         rope_base: float,
         qk_gain_init: float,
+        use_checkpointing: bool,
     ):
         super().__init__()
+        self.use_checkpointing = use_checkpointing
         if logit_softcap <= 0.0:
             raise ValueError(f"logit_softcap must be positive, got {logit_softcap}")
         self.tie_embeddings = tie_embeddings
@@ -691,7 +694,11 @@ class GPT(nn.Module):
         for step in range(self.n_recursive):
             step_signal = self.step_embed(torch.tensor(step, device=x.device)).to(dtype=x.dtype)
             x = x + step_signal
-            x = self.shared_block(x, x0)
+            if self.training and self.use_checkpointing:
+                import torch.utils.checkpoint as checkpoint
+                x = checkpoint.checkpoint(self.shared_block, x, x0, use_reentrant=False)
+            else:
+                x = self.shared_block(x, x0)
 
         x = self.final_norm(x).reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
@@ -816,6 +823,7 @@ def main() -> None:
         logit_softcap=args.logit_softcap,
         rope_base=args.rope_base,
         qk_gain_init=args.qk_gain_init,
+        use_checkpointing=args.use_checkpointing,
     ).to(device).bfloat16()
     for module in base_model.modules():
         if isinstance(module, CastedLinear):

@@ -17,6 +17,7 @@ import uuid
 import zlib
 from collections.abc import Callable
 from pathlib import Path
+import tqdm
 
 import numpy as np
 import sentencepiece as spm
@@ -80,6 +81,7 @@ class Hyperparameters:
     logit_softcap: float = float(os.environ.get("LOGIT_SOFTCAP", 30.0))
     rope_base: float = float(os.environ.get("ROPE_BASE", 10000.0))
     qk_gain_init: float = float(os.environ.get("QK_GAIN_INIT", 1.5))
+    use_checkpointing: bool = bool(int(os.environ.get("USE_CHECKPOINTING", "1")))
 
     # Optimizer. We keep the same per-group defaults as train_gpt.py.
     beta1: float = float(os.environ.get("BETA1", 0.9))
@@ -385,8 +387,9 @@ class GPT(nn.Module):
     # - tied embeddings for the LM head (the baseline default setup)
     def __init__(self, vocab_size: int, num_layers: int, dim: int, num_heads: int, num_kv_heads: int, mlp_mult: int,
                  logit_chunk_tokens: int, logit_softcap: float, rope_base: float, tied_embed_init_std: float,
-                 qk_gain_init: float):
+                 qk_gain_init: float, use_checkpointing: bool = True):
         super().__init__()
+        self.use_checkpointing = use_checkpointing
         if logit_softcap <= 0.0:
             raise ValueError(f"logit_softcap must be positive, got {logit_softcap}")
         self.logit_chunk_tokens = logit_chunk_tokens
@@ -416,7 +419,10 @@ class GPT(nn.Module):
             step_idx = mx.array(step, dtype=mx.int32)
             step_signal = self.step_embed(step_idx).astype(x.dtype)
             x = x + step_signal
-            x = self.shared_block(x, x0)
+            if self.use_checkpointing:
+                x = mx.checkpoint(self.shared_block)(x, x0)
+            else:
+                x = self.shared_block(x, x0)
         return self.final_norm(x)
 
     def loss(self, input_ids: mx.array, target_ids: mx.array) -> mx.array:
@@ -884,6 +890,7 @@ def main() -> None:
         rope_base=args.rope_base,
         tied_embed_init_std=args.tied_embed_init_std,
         qk_gain_init=args.qk_gain_init,
+        use_checkpointing=args.use_checkpointing,
     )
     opt = SplitOptimizers(model, args)
 
@@ -987,6 +994,7 @@ def main() -> None:
     stop_after_step: int | None = None
     t0 = time.perf_counter()
     step = 0
+    pbar = tqdm.tqdm(total=args.iterations, desc="Training")
     while True:
         last_step = step == args.iterations or (stop_after_step is not None and step >= stop_after_step)
         if last_step or (args.val_loss_every > 0 and step % args.val_loss_every == 0):
@@ -1010,6 +1018,7 @@ def main() -> None:
         if last_step:
             if stop_after_step is not None and step < args.iterations:
                 log(f"stopping_early: wallclock_cap train_time:{train_time_ms:.0f}ms step:{step}/{args.iterations}")
+            pbar.close()
             break
 
         lr_mul = args.lr_mul(step, train_time_ms + 1000.0 * (time.perf_counter() - t0))
@@ -1035,6 +1044,7 @@ def main() -> None:
         approx_train_time_ms = train_time_ms + 1000.0 * (time.perf_counter() - t0)
         tok_s = args.train_batch_tokens / (step_ms / 1000.0)
         step += 1
+        pbar.update(1)
         if args.train_log_every > 0 and (step <= 10 or step % args.train_log_every == 0 or stop_after_step is not None):
             log(
                 f"step:{step}/{args.iterations} train_loss:{train_loss_value:.4f} "
