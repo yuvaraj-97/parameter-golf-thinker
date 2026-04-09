@@ -1,4 +1,4 @@
-# 🧠 Parameter Golf - The Thinker Strategy
+4# 🧠 Parameter Golf - The Thinker Strategy
 
 ## 🎯 Architecture & Objectives
 This repository contains "The Thinker" variant for the OpenAI Parameter Golf Challenge. Our primary goal is to achieve extremely deep reasoning logic while staying completely within the 16 MB baseline package.
