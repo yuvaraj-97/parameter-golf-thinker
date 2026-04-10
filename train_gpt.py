@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import glob
 import io
+import json
 import math
 import os
 import random
@@ -36,6 +37,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 # - vocab size 1024, sequence length 1024, tied embeddings
 # - 524,288 train tokens per step for 20,000 iterations with a ~10 minute cap
 
+_QAT_ACTIVE = False
+
 class Hyperparameters:
     # Data paths are shard globs produced by the existing preprocessing pipeline.
     data_path = os.environ.get("DATA_PATH", "./data/datasets/fineweb10B_sp1024")
@@ -49,6 +52,17 @@ class Hyperparameters:
     val_batch_size = int(os.environ.get("VAL_BATCH_SIZE", 524_288))
     val_loss_every = int(os.environ.get("VAL_LOSS_EVERY", 1000))
     train_log_every = int(os.environ.get("TRAIN_LOG_EVERY", 200))
+    adaptive_eval_enabled = bool(int(os.environ.get("ADAPTIVE_EVAL_ENABLED", "0")))
+    adaptive_eval_dense_every = int(os.environ.get("ADAPTIVE_EVAL_DENSE_EVERY", 100))
+    adaptive_eval_band_center_step = int(os.environ.get("ADAPTIVE_EVAL_BAND_CENTER_STEP", 0))
+    adaptive_eval_band_radius_steps = int(os.environ.get("ADAPTIVE_EVAL_BAND_RADIUS_STEPS", 500))
+    adaptive_eval_history_path = os.environ.get("ADAPTIVE_EVAL_HISTORY_PATH", "")
+    adaptive_eval_flatten_window = int(os.environ.get("ADAPTIVE_EVAL_FLATTEN_WINDOW", 3))
+    adaptive_eval_flatten_ratio = float(os.environ.get("ADAPTIVE_EVAL_FLATTEN_RATIO", 0.2))
+    adaptive_eval_min_remaining_fraction = float(os.environ.get("ADAPTIVE_EVAL_MIN_REMAINING_FRACTION", 0.2))
+    cascade_enabled = bool(int(os.environ.get("CASCADE_ENABLED", "0")))
+    ema_decay = float(os.environ.get("EMA_DECAY", 0.997))
+    qat_enabled = bool(int(os.environ.get("QAT_ENABLED", "0")))
 
     # Training length.
     iterations = int(os.environ.get("ITERATIONS", 20000))
@@ -276,6 +290,91 @@ def eval_val(
     tokens_per_byte = val_token_count.item() / val_byte_count.item()
     model.train()
     return float(val_loss.item()), float(bits_per_token * tokens_per_byte)
+
+
+def append_jsonl(path: str, record: dict[str, object]) -> None:
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, sort_keys=True) + "\n")
+
+
+def infer_dense_band_center(path: str) -> int:
+    if not path or not os.path.exists(path):
+        return 0
+    latest_flatten_step = 0
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            flatten_step = int(record.get("flatten_step", 0) or 0)
+            if flatten_step > 0:
+                latest_flatten_step = flatten_step
+    return latest_flatten_step
+
+
+def should_run_validation(args: Hyperparameters, step: int, last_step: bool, dense_band_center_step: int) -> bool:
+    if last_step:
+        return True
+    if step == 0:
+        return args.val_loss_every > 0
+    cadence = args.val_loss_every
+    if (
+        args.adaptive_eval_enabled
+        and dense_band_center_step > 0
+        and abs(step - dense_band_center_step) <= args.adaptive_eval_band_radius_steps
+    ):
+        cadence = args.adaptive_eval_dense_every
+    return cadence > 0 and step % cadence == 0
+
+
+def detect_flattening(eval_history: list[dict[str, float]], flatten_window: int, flatten_ratio: float) -> bool:
+    if len(eval_history) < flatten_window + 2:
+        return False
+    gain_rates: list[float] = []
+    for prev, curr in zip(eval_history, eval_history[1:]):
+        delta_step = max(curr["step"] - prev["step"], 1.0)
+        gain_rates.append((prev["val_bpb"] - curr["val_bpb"]) / delta_step)
+    if len(gain_rates) < flatten_window:
+        return False
+    best_rate = max(gain_rates)
+    if best_rate <= 0:
+        return False
+    recent_rate = sum(gain_rates[-flatten_window:]) / flatten_window
+    return recent_rate <= best_rate * flatten_ratio
+
+
+def init_ema_shadow(module: nn.Module) -> dict[str, Tensor]:
+    return {name: param.detach().clone() for name, param in module.named_parameters()}
+
+
+@torch.no_grad()
+def update_ema_shadow(module: nn.Module, ema_shadow: dict[str, Tensor], decay: float) -> None:
+    for name, param in module.named_parameters():
+        ema_shadow[name].lerp_(param.detach(), 1.0 - decay)
+
+
+@torch.no_grad()
+def copy_params_to_cpu(module: nn.Module) -> dict[str, Tensor]:
+    return {name: param.detach().cpu().clone() for name, param in module.named_parameters()}
+
+
+@torch.no_grad()
+def load_param_snapshot(module: nn.Module, snapshot: dict[str, Tensor]) -> None:
+    for name, param in module.named_parameters():
+        param.copy_(snapshot[name].to(device=param.device, dtype=param.dtype))
+
+
+@torch.no_grad()
+def load_ema_shadow(module: nn.Module, ema_shadow: dict[str, Tensor]) -> None:
+    for name, param in module.named_parameters():
+        param.copy_(ema_shadow[name].to(dtype=param.dtype))
 
 # -----------------------------
 # POST-TRAINING QUANTIZATION
@@ -510,7 +609,13 @@ class CastedLinear(nn.Linear):
     # Keep weights in fp32 for optimizer/state quality, cast at matmul time for bf16 compute.
     def forward(self, x: Tensor) -> Tensor:
         bias = self.bias.to(x.dtype) if self.bias is not None else None
-        return F.linear(x, self.weight.to(x.dtype), bias)
+        weight = self.weight
+        if _QAT_ACTIVE and weight.ndim == 2:
+            max_abs = weight.detach().abs().amax(dim=1, keepdim=True).clamp_min(1.0 / 127.0)
+            scale = max_abs / 127.0
+            q = torch.clamp(torch.round(weight / scale), -127, 127)
+            weight = weight + (q * scale - weight).detach()
+        return F.linear(x, weight.to(x.dtype), bias)
 
 
 def restore_low_dim_params_to_fp32(module: nn.Module) -> None:
@@ -710,11 +815,12 @@ class GPT(nn.Module):
 # -----------------------------
 
 def main() -> None:
-    global zeropower_via_newtonschulz5
+    global zeropower_via_newtonschulz5, _QAT_ACTIVE
 
     code = Path(__file__).read_text(encoding="utf-8")
     args = Hyperparameters()
     zeropower_via_newtonschulz5 = torch.compile(zeropower_via_newtonschulz5)
+    _QAT_ACTIVE = False
 
     # -----------------------------
     # DISTRIBUTED + CUDA SETUP
@@ -774,6 +880,25 @@ def main() -> None:
     )
     log0("=" * 100, console=False)
 
+    dense_band_center_step = args.adaptive_eval_band_center_step
+    if args.adaptive_eval_enabled and dense_band_center_step <= 0 and args.adaptive_eval_history_path:
+        dense_band_center_step = infer_dense_band_center(args.adaptive_eval_history_path)
+    eval_history_path = os.path.join("logs", f"{args.run_id}_adaptive_eval.jsonl")
+    flatten_step = 0
+    stage_eval_history: list[dict[str, float]] = []
+    stage_names = ["base", "late_ema", "late_qat"]
+    stage_index = 0
+    if args.adaptive_eval_enabled:
+        log0(
+            f"adaptive_eval:enabled coarse_every:{args.val_loss_every} "
+            f"dense_every:{args.adaptive_eval_dense_every} "
+            f"band_center:{dense_band_center_step} band_radius:{args.adaptive_eval_band_radius_steps} "
+            f"flatten_window:{args.adaptive_eval_flatten_window} "
+            f"flatten_ratio:{args.adaptive_eval_flatten_ratio:.3f}"
+        )
+    if args.cascade_enabled:
+        log0(f"cascade:enabled ema_decay:{args.ema_decay:.4f} qat_allowed:{int(args.qat_enabled)}")
+
     # -----------------------------
     # TOKENIZER + VALIDATION METRIC SETUP
     # -----------------------------
@@ -821,6 +946,7 @@ def main() -> None:
         if isinstance(module, CastedLinear):
             module.float()
     restore_low_dim_params_to_fp32(base_model)
+    ema_shadow = init_ema_shadow(base_model) if args.cascade_enabled else None
     compiled_model = torch.compile(base_model, dynamic=False, fullgraph=True)
     model: nn.Module = DDP(compiled_model, device_ids=[local_rank], broadcast_buffers=False) if distributed else compiled_model
 
@@ -953,10 +1079,14 @@ def main() -> None:
     while True:
         last_step = step == args.iterations or (stop_after_step is not None and step >= stop_after_step)
 
-        should_validate = last_step or (args.val_loss_every > 0 and step % args.val_loss_every == 0)
+        should_validate = should_run_validation(args, step, last_step, dense_band_center_step)
         if should_validate:
             torch.cuda.synchronize()
             training_time_ms += 1000.0 * (time.perf_counter() - t0)
+            eval_model_cpu_snapshot = None
+            if args.cascade_enabled and ema_shadow is not None and stage_index >= 1:
+                eval_model_cpu_snapshot = copy_params_to_cpu(base_model)
+                load_ema_shadow(base_model, ema_shadow)
             val_loss, val_bpb = eval_val(
                 args,
                 model,
@@ -969,10 +1099,65 @@ def main() -> None:
                 has_leading_space_lut,
                 is_boundary_token_lut,
             )
+            if eval_model_cpu_snapshot is not None:
+                load_param_snapshot(base_model, eval_model_cpu_snapshot)
             log0(
                 f"step:{step}/{args.iterations} val_loss:{val_loss:.4f} val_bpb:{val_bpb:.4f} "
-                f"train_time:{training_time_ms:.0f}ms step_avg:{training_time_ms / max(step, 1):.2f}ms"
+                f"train_time:{training_time_ms:.0f}ms step_avg:{training_time_ms / max(step, 1):.2f}ms "
+                f"stage:{stage_names[stage_index]}"
             )
+            if args.adaptive_eval_enabled:
+                stage_eval_history.append(
+                    {
+                        "step": float(step),
+                        "train_time_ms": float(training_time_ms),
+                        "val_bpb": float(val_bpb),
+                    }
+                )
+                remaining_fraction = 1.0
+                if max_wallclock_ms is not None and max_wallclock_ms > 0:
+                    remaining_fraction = max(max_wallclock_ms - training_time_ms, 0.0) / max_wallclock_ms
+                switch_triggered = False
+                if (
+                    flatten_step == 0
+                    and remaining_fraction >= args.adaptive_eval_min_remaining_fraction
+                    and detect_flattening(
+                        stage_eval_history,
+                        args.adaptive_eval_flatten_window,
+                        args.adaptive_eval_flatten_ratio,
+                    )
+                ):
+                    flatten_step = step
+                    log0(
+                        f"adaptive_eval:flatten_detected step:{flatten_step} "
+                        f"remaining_fraction:{remaining_fraction:.3f} stage:{stage_names[stage_index]}"
+                    )
+                    if args.cascade_enabled and stage_index == 0:
+                        stage_index = 1
+                        stage_eval_history.clear()
+                        log0(f"cascade:switch step:{step} new_stage:{stage_names[stage_index]}")
+                        switch_triggered = True
+                    elif args.cascade_enabled and args.qat_enabled and stage_index == 1:
+                        stage_index = 2
+                        stage_eval_history.clear()
+                        _QAT_ACTIVE = True
+                        log0(f"cascade:switch step:{step} new_stage:{stage_names[stage_index]}")
+                        switch_triggered = True
+                if master_process:
+                    eval_record = {
+                        "run_id": args.run_id,
+                        "step": step,
+                        "train_time_ms": round(training_time_ms, 3),
+                        "val_loss": round(val_loss, 8),
+                        "val_bpb": round(val_bpb, 8),
+                        "step_avg_ms": round(training_time_ms / max(step, 1), 4),
+                        "dense_band_center_step": dense_band_center_step,
+                        "flatten_step": flatten_step,
+                        "stage": stage_names[stage_index],
+                        "switch_triggered": switch_triggered,
+                    }
+                    append_jsonl(eval_history_path, eval_record)
+                flatten_step = 0
             torch.cuda.synchronize()
             t0 = time.perf_counter()
 
@@ -1012,6 +1197,8 @@ def main() -> None:
         for opt in optimizers:
             opt.step()
         zero_grad_all()
+        if args.cascade_enabled and ema_shadow is not None and stage_index >= 1:
+            update_ema_shadow(base_model, ema_shadow, args.ema_decay)
 
         step += 1
         approx_training_time_ms = training_time_ms + 1000.0 * (time.perf_counter() - t0)
@@ -1044,6 +1231,10 @@ def main() -> None:
     # -----------------------------
     # Save the raw state (useful for debugging/loading in PyTorch directly), then always produce
     # the compressed int8+zlib artifact and validate the round-tripped weights.
+
+    if args.cascade_enabled and ema_shadow is not None and stage_index >= 1:
+        load_ema_shadow(base_model, ema_shadow)
+        log0(f"cascade:final_eval_using_stage:{stage_names[stage_index]}")
 
     if master_process:
         torch.save(base_model.state_dict(), "final_model.pt")
