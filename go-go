@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+if [ $# -ne 1 ]; then
+  echo "Usage: ./go-go <config-number>" >&2
+  exit 1
+fi
+
+branch="$(git rev-parse --abbrev-ref HEAD)"
+config="$1"
+script="./runpod/${branch}/config-${config}.sh"
+
+if [ ! -f "$script" ]; then
+  echo "No config ${config} for branch ${branch}." >&2
+  echo "Available configs:" >&2
+  find "./runpod/${branch}" -maxdepth 1 -name 'config-*.sh' -type f 2>/dev/null | sort >&2 || true
+  exit 1
+fi
+
+echo "Running ${script}"
+exec "$script"
