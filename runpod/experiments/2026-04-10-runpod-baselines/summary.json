@@ -1,0 +1,208 @@
+{
+  "date": "2026-04-10",
+  "repo": "parameter-golf-thinker",
+  "purpose": "Initial Runpod verification and baseline comparison across 1-GPU and 8-GPU runs",
+  "runs": [
+    {
+      "id": "master_1gpu_200",
+      "branch": "master",
+      "hardware": {
+        "provider": "Runpod",
+        "gpu_count": 1,
+        "gpu_type": "RTX 2000 Ada"
+      },
+      "config": {
+        "iterations": 200,
+        "train_batch_tokens": 32768,
+        "val_batch_size": 8192,
+        "train_log_every": 20,
+        "val_loss_every": 0,
+        "max_wallclock_seconds": 0
+      },
+      "metrics": {
+        "step_val_loss": 3.9234,
+        "step_val_bpb": 2.3237,
+        "train_time_ms": 45393,
+        "step_avg_ms": 226.97,
+        "peak_memory_allocated_mib": 697,
+        "peak_memory_reserved_mib": 742,
+        "serialized_model_bytes": 8411463,
+        "code_size_bytes": 46958,
+        "total_submission_size_bytes": 8458421,
+        "roundtrip_serialized_model_bytes": 1051652,
+        "roundtrip_total_submission_size_bytes": 1098610,
+        "roundtrip_val_loss": 4.0083,
+        "roundtrip_val_bpb": 2.3739,
+        "roundtrip_eval_time_ms": 145865
+      },
+      "telemetry": {
+        "gpu_utilization_pct": 92,
+        "gpu_vram_used_gib": 0.84,
+        "gpu_vram_total_gib": 16
+      },
+      "outcome": "pass"
+    },
+    {
+      "id": "memory_1gpu_200",
+      "branch": "feature/memory-optimizations",
+      "hardware": {
+        "provider": "Runpod",
+        "gpu_count": 1,
+        "gpu_type": "RTX 2000 Ada"
+      },
+      "config": {
+        "iterations": 200,
+        "train_batch_tokens": 32768,
+        "val_batch_size": 8192,
+        "train_log_every": 20,
+        "val_loss_every": 0,
+        "max_wallclock_seconds": 0
+      },
+      "metrics": {
+        "step_val_loss": 3.9894,
+        "step_val_bpb": 2.3627,
+        "train_time_ms": 104726,
+        "step_avg_ms": 523.63,
+        "peak_memory_allocated_mib": 242,
+        "peak_memory_reserved_mib": 280,
+        "serialized_model_bytes": 8411463,
+        "code_size_bytes": 47396,
+        "total_submission_size_bytes": 8458859,
+        "roundtrip_serialized_model_bytes": 1050961,
+        "roundtrip_total_submission_size_bytes": 1098357,
+        "roundtrip_val_loss": 4.0521,
+        "roundtrip_val_bpb": 2.3999,
+        "roundtrip_eval_time_ms": 354486
+      },
+      "telemetry": {
+        "gpu_utilization_pct": 79,
+        "gpu_vram_used_gib": 1.0,
+        "gpu_vram_total_gib": 16
+      },
+      "outcome": "pass_but_regressed"
+    },
+    {
+      "id": "master_8gpu_200",
+      "branch": "master",
+      "hardware": {
+        "provider": "Runpod",
+        "gpu_count": 8,
+        "gpu_type": "H100 80GB HBM3"
+      },
+      "config": {
+        "iterations": 200,
+        "train_batch_tokens": 262144,
+        "val_batch_size": 65536,
+        "train_log_every": 20,
+        "val_loss_every": 0,
+        "max_wallclock_seconds": 0
+      },
+      "metrics": {
+        "step_val_loss": 3.6550,
+        "step_val_bpb": 2.1647,
+        "train_time_ms": 5887,
+        "step_avg_ms": 29.43,
+        "peak_memory_allocated_mib": 5176,
+        "peak_memory_reserved_mib": 5566,
+        "serialized_model_bytes": 8411463,
+        "code_size_bytes": 46958,
+        "total_submission_size_bytes": 8458421,
+        "roundtrip_serialized_model_bytes": 1078723,
+        "roundtrip_total_submission_size_bytes": 1125681,
+        "roundtrip_val_loss": 3.8422,
+        "roundtrip_val_bpb": 2.2756,
+        "roundtrip_eval_time_ms": 2739
+      },
+      "telemetry": {
+        "gpu_utilization_pct": 100,
+        "gpu_vram_used_gib": 7,
+        "gpu_vram_total_gib": 80,
+        "cpu_load_pct": 4,
+        "host_memory_used_gib": 16.55,
+        "host_memory_total_tib": 1.83,
+        "disk_used_gib": 1,
+        "disk_total_gib": 100
+      },
+      "outcome": "pass"
+    },
+    {
+      "id": "master_8gpu_5000",
+      "branch": "master",
+      "hardware": {
+        "provider": "Runpod",
+        "gpu_count": 8,
+        "gpu_type": "H100 80GB HBM3"
+      },
+      "config": {
+        "iterations": 5000,
+        "train_batch_tokens": 262144,
+        "val_batch_size": 65536,
+        "train_log_every": 50,
+        "val_loss_every": 500,
+        "max_wallclock_seconds": 0
+      },
+      "metrics": {
+        "step_val_loss": 2.5068,
+        "step_val_bpb": 1.4847,
+        "train_time_ms": 147561,
+        "step_avg_ms": 29.51,
+        "peak_memory_allocated_mib": 5163,
+        "peak_memory_reserved_mib": 5176,
+        "serialized_model_bytes": 8411463,
+        "code_size_bytes": 46958,
+        "total_submission_size_bytes": 8458421,
+        "roundtrip_serialized_model_bytes": 2157992,
+        "roundtrip_total_submission_size_bytes": 2204950,
+        "roundtrip_val_loss": 2.5212,
+        "roundtrip_val_bpb": 1.4932,
+        "roundtrip_eval_time_ms": 2655
+      },
+      "outcome": "pass"
+    },
+    {
+      "id": "master_8gpu_20000",
+      "branch": "master",
+      "hardware": {
+        "provider": "Runpod",
+        "gpu_count": 8,
+        "gpu_type": "H100 80GB HBM3"
+      },
+      "config": {
+        "iterations": 20000,
+        "train_batch_tokens": 262144,
+        "val_batch_size": 65536,
+        "train_log_every": 100,
+        "val_loss_every": 1000,
+        "max_wallclock_seconds": 0
+      },
+      "metrics": {
+        "step_val_loss": 2.4633,
+        "step_val_bpb": 1.4589,
+        "train_time_ms": 612766,
+        "step_avg_ms": 30.64,
+        "peak_memory_allocated_mib": 5163,
+        "peak_memory_reserved_mib": 5176,
+        "serialized_model_bytes": 8411463,
+        "code_size_bytes": 46958,
+        "total_submission_size_bytes": 8458421,
+        "roundtrip_serialized_model_bytes": 2161710,
+        "roundtrip_total_submission_size_bytes": 2208668,
+        "roundtrip_val_loss": 2.4964,
+        "roundtrip_val_bpb": 1.4785,
+        "roundtrip_eval_time_ms": 2670
+      },
+      "outcome": "pass_over_10min_train_budget"
+    }
+  ],
+  "conclusions": [
+    "master is the default branch for cloud runs",
+    "feature/memory-optimizations reduced VRAM but regressed speed and quality in the tested setup",
+    "H100 runs are strongly compute-bound rather than memory-bound",
+    "future optimizations should focus on converting unused memory headroom into better quality or throughput"
+  ],
+  "next_hypotheses": [
+    "Test batch or model scaling on H100 because VRAM headroom remains large",
+    "Test a two-stage schedule where a fast early training regime switches to a second method after the loss slope flattens",
+    "Revisit memory optimizations only if they unlock larger batch, context, or model size"
+  ]
+}
