@@ -1,0 +1,76 @@
+W0411 17:00:22.157000 274 torch/distributed/run.py:803] 
+W0411 17:00:22.157000 274 torch/distributed/run.py:803] *****************************************
+W0411 17:00:22.157000 274 torch/distributed/run.py:803] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+W0411 17:00:22.157000 274 torch/distributed/run.py:803] *****************************************
+NCCL version 2.27.5+cuda12.9
+logs/adaptive_cascade_smoke_4gpu_20260411-170020.txt
+adaptive_eval:enabled coarse_every:50 dense_every:25 band_center:100 band_radius:50 flatten_window:2 flatten_ratio:0.500
+cascade:enabled ema_decay:0.9970 qat_allowed:1
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+train_loader:dataset:fineweb10B_sp1024 train_shards:1
+val_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_val_*.bin tokens:62021632
+model_params:2365960
+world_size:4 grad_accum_steps:2
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:8 num_kv_heads:4
+tie_embeddings:True embed_lr:0.05 head_lr:0.0 matrix_lr:0.04 scalar_lr:0.04
+train_batch_tokens:131072 train_seq_len:1024 iterations:200 warmup_steps:20 max_wallclock_seconds:0.000
+seed:1337
+warmup_step:1/20
+warmup_step:2/20
+warmup_step:3/20
+warmup_step:4/20
+warmup_step:5/20
+warmup_step:6/20
+warmup_step:7/20
+warmup_step:8/20
+warmup_step:9/20
+warmup_step:10/20
+warmup_step:11/20
+warmup_step:12/20
+warmup_step:13/20
+warmup_step:14/20
+warmup_step:15/20
+warmup_step:16/20
+warmup_step:17/20
+warmup_step:18/20
+warmup_step:19/20
+warmup_step:20/20
+step:0/200 val_loss:6.9327 val_bpb:4.1059 train_time:0ms step_avg:0.02ms stage:base
+step:1/200 train_loss:6.9339 train_time:46ms step_avg:45.96ms
+step:2/200 train_loss:6.8610 train_time:123ms step_avg:61.59ms
+step:3/200 train_loss:7.4215 train_time:197ms step_avg:65.50ms
+step:4/200 train_loss:7.1171 train_time:272ms step_avg:67.97ms
+step:5/200 train_loss:6.5832 train_time:344ms step_avg:68.89ms
+step:6/200 train_loss:6.2651 train_time:418ms step_avg:69.65ms
+step:7/200 train_loss:6.0626 train_time:493ms step_avg:70.40ms
+step:8/200 train_loss:5.9554 train_time:566ms step_avg:70.79ms
+step:9/200 train_loss:5.9451 train_time:640ms step_avg:71.08ms
+step:10/200 train_loss:5.8539 train_time:714ms step_avg:71.39ms
+step:20/200 train_loss:5.3983 train_time:1429ms step_avg:71.45ms
+step:40/200 train_loss:4.8913 train_time:2898ms step_avg:72.45ms
+step:50/200 val_loss:4.5833 val_bpb:2.7145 train_time:3685ms step_avg:73.70ms stage:base
+step:60/200 train_loss:4.3632 train_time:4371ms step_avg:72.84ms
+step:75/200 val_loss:4.3345 val_bpb:2.5671 train_time:5529ms step_avg:73.72ms stage:base
+step:80/200 train_loss:4.1899 train_time:5847ms step_avg:73.09ms
+step:100/200 train_loss:4.3322 train_time:7322ms step_avg:73.22ms
+step:100/200 val_loss:4.1411 val_bpb:2.4526 train_time:7373ms step_avg:73.73ms stage:base
+adaptive_eval:flatten_detected step:100 remaining_fraction:1.000 stage:base
+cascade:switch step:100 new_stage:late_ema
+step:120/200 train_loss:4.0128 train_time:8800ms step_avg:73.34ms
+step:125/200 val_loss:4.1328 val_bpb:2.4477 train_time:9221ms step_avg:73.77ms stage:late_ema
+step:140/200 train_loss:3.8542 train_time:10280ms step_avg:73.43ms
+step:150/200 val_loss:4.1171 val_bpb:2.4384 train_time:11071ms step_avg:73.80ms stage:late_ema
+step:160/200 train_loss:3.7301 train_time:11760ms step_avg:73.50ms
+step:180/200 train_loss:3.7150 train_time:13240ms step_avg:73.55ms
+step:200/200 train_loss:3.7104 train_time:14720ms step_avg:73.60ms
+step:200/200 val_loss:4.0814 val_bpb:2.4172 train_time:14771ms step_avg:73.86ms stage:late_ema
+peak memory allocated: 2634 MiB reserved: 2706 MiB
+cascade:final_eval_using_stage:late_ema
+Serialized model: 8411463 bytes
+Code size: 60035 bytes
+Total submission size: 8471498 bytes
+Serialized model int8+zlib: 1022556 bytes (payload:2384928 raw_torch:2391146 payload_ratio:3.52x)
+Total submission size int8+zlib: 1082591 bytes
+final_int8_zlib_roundtrip val_loss:4.1689 val_bpb:2.4691 eval_time:16129ms
+final_int8_zlib_roundtrip_exact val_loss:4.16891782 val_bpb:2.46906795
