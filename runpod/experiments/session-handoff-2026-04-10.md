@@ -272,7 +272,7 @@ This fix should be present before trusting any subsequent `late_ema` or `late_qa
 This was the recommended correctness-first smoke run for the new branch:
 
 ```bash
-RUN_ID=adaptive_cascade_smoke_1gpu \
+RUN_ID="${RUN_ID}" \
 DATA_PATH=./data/datasets/fineweb10B_sp1024/ \
 TOKENIZER_PATH=./data/tokenizers/fineweb_1024_bpe.model \
 VOCAB_SIZE=1024 \
@@ -292,7 +292,7 @@ CASCADE_ENABLED=1 \
 QAT_ENABLED=1 \
 EMA_DECAY=0.997 \
 MAX_WALLCLOCK_SECONDS=0 \
-torchrun --standalone --nproc_per_node=1 train_gpt.py | tee adaptive-cascade-smoke-1gpu.log
+torchrun --standalone --nproc_per_node=1 train_gpt.py |& tee "logs/${RUN_ID}.console.log"
 ```
 
 ## Current strategic direction
