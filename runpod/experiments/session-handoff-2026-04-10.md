@@ -19,6 +19,42 @@ This document captures the working context from the Runpod and adaptive-cascade 
 
 Other earlier templates were created during the session, but the 1-GPU template above is the one explicitly preserved for ongoing work.
 
+### 2026-04-11 template hardening
+
+The `parameter-golf-train-1gpu` template was hardened so a fresh pod now boots much closer to a ready-to-train state.
+
+Environment variables added:
+
+- `GITHUB_SSH_PRIVATE_KEY_B64`
+- `GIT_USER_NAME=yuvaraj-97`
+- `GIT_USER_EMAIL=mailtoyuvaraj11@gmail.com`
+- `GIT_BRANCH=adaptive-cascade-controller`
+
+Important detail:
+
+- `GITHUB_SSH_PRIVATE_KEY_B64` is bound to a Runpod secret containing the base64-encoded SSH private key, not the raw multiline key.
+
+Container bootstrap behavior now:
+
+- decodes `GITHUB_SSH_PRIVATE_KEY_B64` into `/root/.ssh/id_ed25519`
+- fixes SSH permissions
+- derives `/root/.ssh/id_ed25519.pub`
+- adds GitHub to `known_hosts`
+- sets global git username and email
+- removes the image-default `/workspace/parameter-golf`
+- clones `git@github.com:yuvaraj-97/parameter-golf-thinker.git`
+- checks out and fast-forwards `adaptive-cascade-controller`
+- attempts dataset preparation
+- leaves the container alive via `sleep infinity`
+
+Result:
+
+- a fresh pod should already have GitHub SSH configured
+- the repository cloned
+- the target branch checked out
+- dataset preparation attempted
+- the shell ready to start training immediately
+
 ## Repo branches tested on Runpod
 
 ### `master`
@@ -81,6 +117,31 @@ Validated successfully on:
 
 - Active training used relatively little VRAM.
 - The tested setups looked compute-bound rather than memory-bound.
+
+### 1x RTX A4000 Community Cloud
+
+Telemetry snapshot captured during active single-GPU adaptive smoke testing on 2026-04-11:
+
+- Pod: `broken_indigo_dragonfly`
+- Pod ID: `r8dhfu3ey333uv`
+- Uptime at capture: `10m 26s`
+- Disk: `446 MB / 50 GB`
+- CPU load: `8%`
+- Host CPU: `AMD EPYC 7453`
+- Host RAM: `3.943 GiB / 57.74 GiB`
+- GPU: `RTX A4000`
+- GPU utilization: `62%`
+- GPU VRAM: `1 GiB / 16 GiB`
+- GPU temperature: `86 C`
+- GPU power draw: `138 W`
+- Driver version: `550.144.03`
+- CUDA version: `12.4`
+
+Interpretation:
+
+- the smoke run fits very comfortably in `16 GB` VRAM
+- host RAM and CPU are not bottlenecks
+- this setup still looks compute-bound rather than memory-bound
 
 ### 8x H100 80GB HBM3
 
@@ -156,6 +217,27 @@ The new idea was to avoid one fixed training regime for the full run. Instead:
 - No serious end-to-end adaptive-cascade run has been validated yet.
 - The code compiles, but the controller and stage switches still need smoke testing.
 - This branch should be validated on a cheap 1-GPU pod first before any multi-GPU adaptive run.
+
+### 2026-04-11 smoke findings
+
+Observed during the first A4000 adaptive smoke:
+
+- dense adaptive evals fired at `step 50`, `75`, and `100`
+- `flatten_detected` fired at `step 100`
+- the controller switched from `base` to `late_ema` at `step 100`
+- the first `late_ema` eval regressed sharply from `2.5528` to `3.8331 val_bpb`
+
+Interpretation:
+
+- the smoke configuration was aggressive enough to trigger flattening too early for a `200`-step run
+- more importantly, the first `late_ema` eval exposed a controller bug: EMA state was initialized at startup and not re-seeded from live weights when switching stages
+
+Repo fix applied after this finding:
+
+- re-seed `ema_shadow` from `base_model` at the moment of the `base -> late_ema` transition
+- track flatten detection per stage instead of resetting `flatten_step` after every eval record
+
+This fix should be present before trusting any subsequent `late_ema` or `late_qat` smoke conclusions.
 
 ## Branching / git status note
 
