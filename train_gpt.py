@@ -7,6 +7,7 @@ Hard stop: To keep readable for newcomers, let's make sure `train_gpt.py` and `t
 from __future__ import annotations
 
 import copy
+import csv
 import glob
 import io
 import json
@@ -300,6 +301,18 @@ def append_jsonl(path: str, record: dict[str, object]) -> None:
         f.write(json.dumps(record, sort_keys=True) + "\n")
 
 
+def append_csv_row(path: str, record: dict[str, object]) -> None:
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    file_exists = os.path.exists(path)
+    with open(path, "a", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(record.keys()))
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(record)
+
+
 def infer_dense_band_center(path: str) -> int:
     if not path or not os.path.exists(path):
         return 0
@@ -348,6 +361,44 @@ def detect_flattening(eval_history: list[dict[str, float]], flatten_window: int,
         return False
     recent_rate = sum(gain_rates[-flatten_window:]) / flatten_window
     return recent_rate <= best_rate * flatten_ratio
+
+
+def summarize_gain_rates(eval_history: list[dict[str, float]], flatten_window: int) -> dict[str, float]:
+    if len(eval_history) < 2:
+        return {
+            "delta_step": 0.0,
+            "delta_time_ms": 0.0,
+            "gain_bpb": 0.0,
+            "gain_per_step": 0.0,
+            "gain_per_second": 0.0,
+            "recent_gain_per_step": 0.0,
+            "recent_gain_per_second": 0.0,
+        }
+    prev = eval_history[-2]
+    curr = eval_history[-1]
+    delta_step = max(curr["step"] - prev["step"], 1.0)
+    delta_time_ms = max(curr["train_time_ms"] - prev["train_time_ms"], 1.0)
+    gain_bpb = prev["val_bpb"] - curr["val_bpb"]
+    gain_per_step = gain_bpb / delta_step
+    gain_per_second = 1000.0 * gain_bpb / delta_time_ms
+    interval_rates = []
+    for prev_point, curr_point in zip(eval_history, eval_history[1:]):
+        local_delta_step = max(curr_point["step"] - prev_point["step"], 1.0)
+        local_delta_time_ms = max(curr_point["train_time_ms"] - prev_point["train_time_ms"], 1.0)
+        local_gain = prev_point["val_bpb"] - curr_point["val_bpb"]
+        interval_rates.append((local_gain / local_delta_step, 1000.0 * local_gain / local_delta_time_ms))
+    window = min(flatten_window, len(interval_rates))
+    recent_gain_per_step = sum(rate for rate, _ in interval_rates[-window:]) / max(window, 1)
+    recent_gain_per_second = sum(rate for _, rate in interval_rates[-window:]) / max(window, 1)
+    return {
+        "delta_step": delta_step,
+        "delta_time_ms": delta_time_ms,
+        "gain_bpb": gain_bpb,
+        "gain_per_step": gain_per_step,
+        "gain_per_second": gain_per_second,
+        "recent_gain_per_step": recent_gain_per_step,
+        "recent_gain_per_second": recent_gain_per_second,
+    }
 
 
 def init_ema_shadow(module: nn.Module) -> dict[str, Tensor]:
@@ -884,6 +935,7 @@ def main() -> None:
     if args.adaptive_eval_enabled and dense_band_center_step <= 0 and args.adaptive_eval_history_path:
         dense_band_center_step = infer_dense_band_center(args.adaptive_eval_history_path)
     eval_history_path = os.path.join("logs", f"{args.run_id}_adaptive_eval.jsonl")
+    eval_history_csv_path = os.path.join("logs", f"{args.run_id}_adaptive_eval.csv")
     flatten_step = 0
     stage_eval_history: list[dict[str, float]] = []
     stage_names = ["base", "late_ema", "late_qat"]
@@ -1072,159 +1124,185 @@ def main() -> None:
 
     training_time_ms = 0.0
     stop_after_step: int | None = None
+    interrupted = False
     torch.cuda.synchronize()
     t0 = time.perf_counter()
 
     step = 0
-    while True:
-        last_step = step == args.iterations or (stop_after_step is not None and step >= stop_after_step)
+    try:
+        while True:
+            last_step = step == args.iterations or (stop_after_step is not None and step >= stop_after_step)
 
-        should_validate = should_run_validation(args, step, last_step, dense_band_center_step)
-        if should_validate:
-            torch.cuda.synchronize()
-            training_time_ms += 1000.0 * (time.perf_counter() - t0)
-            eval_model_cpu_snapshot = None
-            if args.cascade_enabled and ema_shadow is not None and stage_index >= 1:
-                eval_model_cpu_snapshot = copy_params_to_cpu(base_model)
-                load_ema_shadow(base_model, ema_shadow)
-            val_loss, val_bpb = eval_val(
-                args,
-                model,
-                rank,
-                world_size,
-                device,
-                grad_accum_steps,
-                val_tokens,
-                base_bytes_lut,
-                has_leading_space_lut,
-                is_boundary_token_lut,
-            )
-            if eval_model_cpu_snapshot is not None:
-                load_param_snapshot(base_model, eval_model_cpu_snapshot)
-            log0(
-                f"step:{step}/{args.iterations} val_loss:{val_loss:.4f} val_bpb:{val_bpb:.4f} "
-                f"train_time:{training_time_ms:.0f}ms step_avg:{training_time_ms / max(step, 1):.2f}ms "
-                f"stage:{stage_names[stage_index]}"
-            )
-            if args.adaptive_eval_enabled:
-                stage_eval_history.append(
-                    {
-                        "step": float(step),
-                        "train_time_ms": float(training_time_ms),
-                        "val_bpb": float(val_bpb),
-                    }
+            should_validate = should_run_validation(args, step, last_step, dense_band_center_step)
+            if should_validate:
+                torch.cuda.synchronize()
+                training_time_ms += 1000.0 * (time.perf_counter() - t0)
+                eval_model_cpu_snapshot = None
+                if args.cascade_enabled and ema_shadow is not None and stage_index >= 1:
+                    eval_model_cpu_snapshot = copy_params_to_cpu(base_model)
+                    load_ema_shadow(base_model, ema_shadow)
+                val_loss, val_bpb = eval_val(
+                    args,
+                    model,
+                    rank,
+                    world_size,
+                    device,
+                    grad_accum_steps,
+                    val_tokens,
+                    base_bytes_lut,
+                    has_leading_space_lut,
+                    is_boundary_token_lut,
                 )
-                remaining_fraction = 1.0
-                if max_wallclock_ms is not None and max_wallclock_ms > 0:
-                    remaining_fraction = max(max_wallclock_ms - training_time_ms, 0.0) / max_wallclock_ms
-                switch_triggered = False
-                if (
-                    flatten_step == 0
-                    and remaining_fraction >= args.adaptive_eval_min_remaining_fraction
-                    and detect_flattening(
-                        stage_eval_history,
-                        args.adaptive_eval_flatten_window,
-                        args.adaptive_eval_flatten_ratio,
-                    )
-                ):
-                    flatten_step = step
-                    log0(
-                        f"adaptive_eval:flatten_detected step:{flatten_step} "
-                        f"remaining_fraction:{remaining_fraction:.3f} stage:{stage_names[stage_index]}"
-                    )
-                    if args.cascade_enabled and stage_index == 0:
-                        stage_index = 1
-                        stage_eval_history.clear()
-                        log0(f"cascade:switch step:{step} new_stage:{stage_names[stage_index]}")
-                        switch_triggered = True
-                    elif args.cascade_enabled and args.qat_enabled and stage_index == 1:
-                        stage_index = 2
-                        stage_eval_history.clear()
-                        _QAT_ACTIVE = True
-                        log0(f"cascade:switch step:{step} new_stage:{stage_names[stage_index]}")
-                        switch_triggered = True
-                if master_process:
-                    eval_record = {
-                        "run_id": args.run_id,
-                        "step": step,
-                        "train_time_ms": round(training_time_ms, 3),
-                        "val_loss": round(val_loss, 8),
-                        "val_bpb": round(val_bpb, 8),
-                        "step_avg_ms": round(training_time_ms / max(step, 1), 4),
-                        "dense_band_center_step": dense_band_center_step,
-                        "flatten_step": flatten_step,
-                        "stage": stage_names[stage_index],
-                        "switch_triggered": switch_triggered,
-                    }
-                    append_jsonl(eval_history_path, eval_record)
-                flatten_step = 0
-            torch.cuda.synchronize()
-            t0 = time.perf_counter()
-
-        if last_step:
-            if stop_after_step is not None and step < args.iterations:
+                if eval_model_cpu_snapshot is not None:
+                    load_param_snapshot(base_model, eval_model_cpu_snapshot)
                 log0(
-                    f"stopping_early: wallclock_cap train_time:{training_time_ms:.0f}ms "
-                    f"step:{step}/{args.iterations}"
+                    f"step:{step}/{args.iterations} val_loss:{val_loss:.4f} val_bpb:{val_bpb:.4f} "
+                    f"train_time:{training_time_ms:.0f}ms step_avg:{training_time_ms / max(step, 1):.2f}ms "
+                    f"stage:{stage_names[stage_index]}"
                 )
-            break
+                if args.adaptive_eval_enabled:
+                    stage_eval_history.append(
+                        {
+                            "step": float(step),
+                            "train_time_ms": float(training_time_ms),
+                            "val_bpb": float(val_bpb),
+                        }
+                    )
+                    remaining_fraction = 1.0
+                    if max_wallclock_ms is not None and max_wallclock_ms > 0:
+                        remaining_fraction = max(max_wallclock_ms - training_time_ms, 0.0) / max_wallclock_ms
+                    switch_triggered = False
+                    if (
+                        flatten_step == 0
+                        and remaining_fraction >= args.adaptive_eval_min_remaining_fraction
+                        and detect_flattening(
+                            stage_eval_history,
+                            args.adaptive_eval_flatten_window,
+                            args.adaptive_eval_flatten_ratio,
+                        )
+                    ):
+                        flatten_step = step
+                        log0(
+                            f"adaptive_eval:flatten_detected step:{flatten_step} "
+                            f"remaining_fraction:{remaining_fraction:.3f} stage:{stage_names[stage_index]}"
+                        )
+                        if args.cascade_enabled and stage_index == 0:
+                            stage_index = 1
+                            stage_eval_history.clear()
+                            log0(f"cascade:switch step:{step} new_stage:{stage_names[stage_index]}")
+                            switch_triggered = True
+                        elif args.cascade_enabled and args.qat_enabled and stage_index == 1:
+                            stage_index = 2
+                            stage_eval_history.clear()
+                            _QAT_ACTIVE = True
+                            log0(f"cascade:switch step:{step} new_stage:{stage_names[stage_index]}")
+                            switch_triggered = True
+                    if master_process:
+                        slope_summary = summarize_gain_rates(stage_eval_history, args.adaptive_eval_flatten_window)
+                        eval_record = {
+                            "run_id": args.run_id,
+                            "step": step,
+                            "train_time_ms": round(training_time_ms, 3),
+                            "val_loss": round(val_loss, 8),
+                            "val_bpb": round(val_bpb, 8),
+                            "step_avg_ms": round(training_time_ms / max(step, 1), 4),
+                            "dense_band_center_step": dense_band_center_step,
+                            "flatten_step": flatten_step,
+                            "stage": stage_names[stage_index],
+                            "switch_triggered": switch_triggered,
+                            **{k: round(v, 8) for k, v in slope_summary.items()},
+                        }
+                        append_jsonl(eval_history_path, eval_record)
+                        append_csv_row(eval_history_csv_path, eval_record)
+                    flatten_step = 0
+                torch.cuda.synchronize()
+                t0 = time.perf_counter()
 
-        elapsed_ms = training_time_ms + 1000.0 * (time.perf_counter() - t0)
-        scale = lr_mul(step, elapsed_ms)
-        zero_grad_all()
-        train_loss = torch.zeros((), device=device)
-        for micro_step in range(grad_accum_steps):
-            if distributed:
-                model.require_backward_grad_sync = micro_step == grad_accum_steps - 1
-            x, y = train_loader.next_batch(args.train_batch_tokens, args.train_seq_len, grad_accum_steps)
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
-                loss = model(x, y)
-            train_loss += loss.detach()
-            (loss * grad_scale).backward()
-        train_loss /= grad_accum_steps
+            if last_step:
+                if stop_after_step is not None and step < args.iterations:
+                    log0(
+                        f"stopping_early: wallclock_cap train_time:{training_time_ms:.0f}ms "
+                        f"step:{step}/{args.iterations}"
+                    )
+                break
 
-        frac = min(step / args.muon_momentum_warmup_steps, 1.0) if args.muon_momentum_warmup_steps > 0 else 1.0
-        muon_momentum = (1 - frac) * args.muon_momentum_warmup_start + frac * args.muon_momentum
-        for group in optimizer_muon.param_groups:
-            group["momentum"] = muon_momentum
+            elapsed_ms = training_time_ms + 1000.0 * (time.perf_counter() - t0)
+            scale = lr_mul(step, elapsed_ms)
+            zero_grad_all()
+            train_loss = torch.zeros((), device=device)
+            for micro_step in range(grad_accum_steps):
+                if distributed:
+                    model.require_backward_grad_sync = micro_step == grad_accum_steps - 1
+                x, y = train_loader.next_batch(args.train_batch_tokens, args.train_seq_len, grad_accum_steps)
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
+                    loss = model(x, y)
+                train_loss += loss.detach()
+                (loss * grad_scale).backward()
+            train_loss /= grad_accum_steps
 
-        for opt in optimizers:
-            for group in opt.param_groups:
-                group["lr"] = group["base_lr"] * scale
+            frac = min(step / args.muon_momentum_warmup_steps, 1.0) if args.muon_momentum_warmup_steps > 0 else 1.0
+            muon_momentum = (1 - frac) * args.muon_momentum_warmup_start + frac * args.muon_momentum
+            for group in optimizer_muon.param_groups:
+                group["momentum"] = muon_momentum
 
-        if args.grad_clip_norm > 0:
-            torch.nn.utils.clip_grad_norm_(base_model.parameters(), args.grad_clip_norm)
-        for opt in optimizers:
-            opt.step()
-        zero_grad_all()
-        if args.cascade_enabled and ema_shadow is not None and stage_index >= 1:
-            update_ema_shadow(base_model, ema_shadow, args.ema_decay)
+            for opt in optimizers:
+                for group in opt.param_groups:
+                    group["lr"] = group["base_lr"] * scale
 
-        step += 1
-        approx_training_time_ms = training_time_ms + 1000.0 * (time.perf_counter() - t0)
-        should_log_train = (
-            args.train_log_every > 0
-            and (step <= 10 or step % args.train_log_every == 0 or stop_after_step is not None)
-        )
-        if should_log_train:
-            log0(
-                f"step:{step}/{args.iterations} train_loss:{train_loss.item():.4f} "
-                f"train_time:{approx_training_time_ms:.0f}ms step_avg:{approx_training_time_ms / step:.2f}ms"
+            if args.grad_clip_norm > 0:
+                torch.nn.utils.clip_grad_norm_(base_model.parameters(), args.grad_clip_norm)
+            for opt in optimizers:
+                opt.step()
+            zero_grad_all()
+            if args.cascade_enabled and ema_shadow is not None and stage_index >= 1:
+                update_ema_shadow(base_model, ema_shadow, args.ema_decay)
+
+            step += 1
+            approx_training_time_ms = training_time_ms + 1000.0 * (time.perf_counter() - t0)
+            should_log_train = (
+                args.train_log_every > 0
+                and (step <= 10 or step % args.train_log_every == 0 or stop_after_step is not None)
             )
+            if should_log_train:
+                log0(
+                    f"step:{step}/{args.iterations} train_loss:{train_loss.item():.4f} "
+                    f"train_time:{approx_training_time_ms:.0f}ms step_avg:{approx_training_time_ms / step:.2f}ms"
+                )
 
-        # Needed to sync whether we've reached the wallclock cap.
-        reached_cap = max_wallclock_ms is not None and approx_training_time_ms >= max_wallclock_ms
-        if distributed and max_wallclock_ms is not None:
-            reached_cap_tensor = torch.tensor(int(reached_cap), device=device)
-            dist.all_reduce(reached_cap_tensor, op=dist.ReduceOp.MAX)
-            reached_cap = bool(reached_cap_tensor.item())
-        if stop_after_step is None and reached_cap:
-            stop_after_step = step
+            # Needed to sync whether we've reached the wallclock cap.
+            reached_cap = max_wallclock_ms is not None and approx_training_time_ms >= max_wallclock_ms
+            if distributed and max_wallclock_ms is not None:
+                reached_cap_tensor = torch.tensor(int(reached_cap), device=device)
+                dist.all_reduce(reached_cap_tensor, op=dist.ReduceOp.MAX)
+                reached_cap = bool(reached_cap_tensor.item())
+            if stop_after_step is None and reached_cap:
+                stop_after_step = step
+    except KeyboardInterrupt:
+        interrupted = True
+        torch.cuda.synchronize()
+        training_time_ms += 1000.0 * (time.perf_counter() - t0)
+        log0(f"interrupted:step:{step} train_time:{training_time_ms:.0f}ms stage:{stage_names[stage_index]}")
 
     log0(
         f"peak memory allocated: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB "
         f"reserved: {torch.cuda.max_memory_reserved() // 1024 // 1024} MiB"
     )
+
+    if args.adaptive_eval_enabled and master_process:
+        run_end_record = {
+            "run_id": args.run_id,
+            "event": "run_end",
+            "step": step,
+            "train_time_ms": round(training_time_ms, 3),
+            "stage": stage_names[stage_index],
+            "interrupted": interrupted,
+        }
+        append_jsonl(eval_history_path, run_end_record)
+
+    if interrupted:
+        if distributed:
+            dist.destroy_process_group()
+        return
 
     # -----------------------------
     # SERIALIZATION + ROUNDTRIP VALIDATION
