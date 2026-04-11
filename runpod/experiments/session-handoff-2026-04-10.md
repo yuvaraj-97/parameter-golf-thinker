@@ -71,6 +71,12 @@ Validated successfully on:
 - Was slower and worse than `master` in the tested smoke run
 - Kept intentionally for later / end-stage consideration rather than as current default
 
+### `adaptive-cascade-controller`
+
+- Active validation in progress on `1x RTX A4000` Community Cloud
+- Purpose of this run: validate adaptive eval cadence, flatten detection, and late-stage switching behavior before any multi-GPU cascade run
+- This branch should be tracked separately from `master` telemetry because the controller changes alter both eval cadence and stage behavior
+
 ## Confirmed results
 
 ### 1 GPU, 200 steps, `master`
@@ -113,12 +119,12 @@ Validated successfully on:
 
 ## Telemetry conclusions
 
-### 1x RTX 2000 Ada
+### `master` on 1x RTX 2000 Ada
 
 - Active training used relatively little VRAM.
 - The tested setups looked compute-bound rather than memory-bound.
 
-### 1x RTX A4000 Community Cloud
+### `adaptive-cascade-controller` on 1x RTX A4000 Community Cloud
 
 Telemetry snapshot captured during active single-GPU adaptive smoke testing on 2026-04-11:
 
@@ -143,7 +149,7 @@ Interpretation:
 - host RAM and CPU are not bottlenecks
 - this setup still looks compute-bound rather than memory-bound
 
-### 8x H100 80GB HBM3
+### `master` on 8x H100 80GB HBM3
 
 - GPU utilization reached 100%.
 - VRAM usage was only around `~7 GiB / 80 GiB`.

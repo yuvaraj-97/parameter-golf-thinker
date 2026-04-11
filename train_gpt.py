@@ -937,7 +937,6 @@ def main() -> None:
     eval_history_path = os.path.join("logs", f"{args.run_id}_adaptive_eval.jsonl")
     eval_history_csv_path = os.path.join("logs", f"{args.run_id}_adaptive_eval.csv")
     flatten_step = 0
-    stage_flatten_detected = False
     stage_eval_history: list[dict[str, float]] = []
     stage_names = ["base", "late_ema", "late_qat"]
     stage_index = 0
@@ -1174,7 +1173,7 @@ def main() -> None:
                         remaining_fraction = max(max_wallclock_ms - training_time_ms, 0.0) / max_wallclock_ms
                     switch_triggered = False
                     if (
-                        not stage_flatten_detected
+                        flatten_step == 0
                         and remaining_fraction >= args.adaptive_eval_min_remaining_fraction
                         and detect_flattening(
                             stage_eval_history,
@@ -1183,22 +1182,18 @@ def main() -> None:
                         )
                     ):
                         flatten_step = step
-                        stage_flatten_detected = True
                         log0(
                             f"adaptive_eval:flatten_detected step:{flatten_step} "
                             f"remaining_fraction:{remaining_fraction:.3f} stage:{stage_names[stage_index]}"
                         )
                         if args.cascade_enabled and stage_index == 0:
-                            ema_shadow = init_ema_shadow(base_model)
                             stage_index = 1
                             stage_eval_history.clear()
-                            stage_flatten_detected = False
                             log0(f"cascade:switch step:{step} new_stage:{stage_names[stage_index]}")
                             switch_triggered = True
                         elif args.cascade_enabled and args.qat_enabled and stage_index == 1:
                             stage_index = 2
                             stage_eval_history.clear()
-                            stage_flatten_detected = False
                             _QAT_ACTIVE = True
                             log0(f"cascade:switch step:{step} new_stage:{stage_names[stage_index]}")
                             switch_triggered = True
@@ -1219,6 +1214,7 @@ def main() -> None:
                         }
                         append_jsonl(eval_history_path, eval_record)
                         append_csv_row(eval_history_csv_path, eval_record)
+                    flatten_step = 0
                 torch.cuda.synchronize()
                 t0 = time.perf_counter()
 
