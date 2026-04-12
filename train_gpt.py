@@ -1236,8 +1236,9 @@ def main() -> None:
 
             if last_step:
                 if stop_after_step is not None and step < args.iterations:
+                    reason = "cascade_early_stop" if stage_flatten_detected else "wallclock_cap"
                     log0(
-                        f"stopping_early: wallclock_cap train_time:{training_time_ms:.0f}ms "
+                        f"stopping_early: {reason} train_time:{training_time_ms:.0f}ms "
                         f"step:{step}/{args.iterations}"
                     )
                 break
