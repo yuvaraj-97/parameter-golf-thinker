@@ -25,4 +25,4 @@ CASCADE_ENABLED="${CASCADE_ENABLED:-1}" \
 QAT_ENABLED="${QAT_ENABLED:-0}" \
 EMA_DECAY="${EMA_DECAY:-0.997}" \
 MAX_WALLCLOCK_SECONDS="${MAX_WALLCLOCK_SECONDS:-0}" \
-torchrun --standalone --nproc_per_node="${NPROC_PER_NODE:-4}" train_gpt.py
+torchrun --standalone --nproc_per_node="${NPROC_PER_NODE:-4}" train_gpt.py 2>&1 | tee "logs/${RUN_ID}.console.log"

@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${RUN_ID:?RUN_ID is not set}"
+# Auto-detect RUN_ID from the most recently modified adaptive_eval.jsonl if not set.
+if [ -z "${RUN_ID:-}" ]; then
+  latest="$(ls -t logs/*_adaptive_eval.jsonl 2>/dev/null | head -n 1)"
+  if [ -z "$latest" ]; then
+    echo "error: RUN_ID is not set and no adaptive_eval.jsonl found in logs/" >&2
+    exit 1
+  fi
+  RUN_ID="$(basename "$latest" _adaptive_eval.jsonl)"
+  echo "auto-detected RUN_ID: $RUN_ID"
+fi
 
 GPU_COUNT="$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l | tr -d ' ')"
 GPU_NAME="$(nvidia-smi --query-gpu=name --format=csv,noheader | head -n 1 | xargs)"
@@ -12,18 +21,19 @@ RUN_DIR="runpod/experiments/${DATE_TAG}-${GPU_SLUG}-${GPU_COUNT}gpu/${RUN_ID}"
 
 mkdir -p "$RUN_DIR"
 
-cp "logs/${RUN_ID}.console.log" "$RUN_DIR/console.log"
-cp "logs/${RUN_ID}.txt" "$RUN_DIR/train.log"
-cp "logs/${RUN_ID}_adaptive_eval.jsonl" "$RUN_DIR/adaptive_eval.jsonl"
-cp "logs/${RUN_ID}_adaptive_eval.csv" "$RUN_DIR/adaptive_eval.csv"
+# Required log files.
+cp "logs/${RUN_ID}.txt"                  "$RUN_DIR/train.log"
+cp "logs/${RUN_ID}_adaptive_eval.jsonl"  "$RUN_DIR/adaptive_eval.jsonl"
+cp "logs/${RUN_ID}_adaptive_eval.csv"    "$RUN_DIR/adaptive_eval.csv"
 
-if [ -f final_model.pt ]; then
-  cp final_model.pt "$RUN_DIR/final_model.pt"
-fi
-
-if [ -f final_model.int8.ptz ]; then
-  cp final_model.int8.ptz "$RUN_DIR/final_model.int8.ptz"
-fi
+# Optional files — present only when captured or training completed cleanly.
+for src dest in \
+  "logs/${RUN_ID}.console.log" "$RUN_DIR/console.log" \
+  "final_model.pt"              "$RUN_DIR/final_model.pt" \
+  "final_model.int8.ptz"        "$RUN_DIR/final_model.int8.ptz"
+do
+  [ -f "$src" ] && cp "$src" "$dest" || echo "skipping missing: $src"
+done
 
 printf '# %s\n\n- Pod: %s\n- GPU: %sx %s\n- Run ID: `%s`\n' \
   "$RUN_ID" "$POD_NAME" "$GPU_COUNT" "$GPU_NAME" "$RUN_ID" > "$RUN_DIR/README.md"
