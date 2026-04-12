@@ -1195,12 +1195,24 @@ def main() -> None:
                             stage_flatten_detected = False
                             log0(f"cascade:switch step:{step} new_stage:{stage_names[stage_index]}")
                             switch_triggered = True
-                        elif args.cascade_enabled and args.qat_enabled and stage_index == 1:
-                            stage_index = 2
-                            stage_eval_history.clear()
-                            stage_flatten_detected = False
-                            _QAT_ACTIVE = True
-                            log0(f"cascade:switch step:{step} new_stage:{stage_names[stage_index]}")
+                        elif args.cascade_enabled and stage_index == 1:
+                            if args.qat_enabled:
+                                # Seed QAT from the EMA optimum, not the raw optimizer weights.
+                                # eval_model_cpu_snapshot already restored base_model above, so
+                                # ema_shadow still holds the smoothed best weights — load them in.
+                                load_ema_shadow(base_model, ema_shadow)
+                                # Reset EMA shadow so it tracks QAT fine-tuning from this clean start.
+                                ema_shadow = init_ema_shadow(base_model)
+                                stage_index = 2
+                                stage_eval_history.clear()
+                                stage_flatten_detected = False
+                                _QAT_ACTIVE = True
+                                log0(f"cascade:switch step:{step} new_stage:{stage_names[stage_index]}")
+                            else:
+                                # No QAT stage available — stop here so the optimizer cannot
+                                # drag the EMA shadow past its current optimum.
+                                stop_after_step = step
+                                log0(f"cascade:early_stop step:{step} reason:late_ema_plateau_no_qat")
                             switch_triggered = True
                     if master_process:
                         slope_summary = summarize_gain_rates(stage_eval_history, args.adaptive_eval_flatten_window)
