@@ -935,6 +935,12 @@ def main() -> None:
     dense_band_center_step = args.adaptive_eval_band_center_step
     if args.adaptive_eval_enabled and dense_band_center_step <= 0 and args.adaptive_eval_history_path:
         dense_band_center_step = infer_dense_band_center(args.adaptive_eval_history_path)
+    if args.adaptive_eval_enabled and dense_band_center_step <= 0:
+        # No history and no hardcoded center — default to iterations/5.
+        # Base typically flattens at 20-40% of training; this centres the
+        # dense band so it catches the base→ema transition on the first run.
+        dense_band_center_step = max(args.iterations // 5, 1)
+        log0(f"adaptive_eval:auto_band_center step:{dense_band_center_step} (no history, using iterations/5)")
     eval_history_path = os.path.join("logs", f"{args.run_id}_adaptive_eval.jsonl")
     eval_history_csv_path = os.path.join("logs", f"{args.run_id}_adaptive_eval.csv")
     flatten_step = 0
