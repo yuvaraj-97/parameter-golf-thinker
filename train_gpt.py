@@ -64,6 +64,7 @@ class Hyperparameters:
     cascade_enabled = bool(int(os.environ.get("CASCADE_ENABLED", "0")))
     ema_decay = float(os.environ.get("EMA_DECAY", 0.997))
     qat_enabled = bool(int(os.environ.get("QAT_ENABLED", "0")))
+    qat_lr_fraction = float(os.environ.get("QAT_LR_FRACTION", 0.15))
 
     # Training length.
     iterations = int(os.environ.get("ITERATIONS", 20000))
@@ -950,7 +951,7 @@ def main() -> None:
             f"flatten_ratio:{args.adaptive_eval_flatten_ratio:.3f}"
         )
     if args.cascade_enabled:
-        log0(f"cascade:enabled ema_decay:{args.ema_decay:.4f} qat_allowed:{int(args.qat_enabled)}")
+        log0(f"cascade:enabled ema_decay:{args.ema_decay:.4f} qat_allowed:{int(args.qat_enabled)} qat_lr_fraction:{args.qat_lr_fraction:.3f}")
 
     # -----------------------------
     # TOKENIZER + VALIDATION METRIC SETUP
@@ -1207,12 +1208,18 @@ def main() -> None:
                                 stage_eval_history.clear()
                                 stage_flatten_detected = False
                                 _QAT_ACTIVE = True
-                                log0(f"cascade:switch step:{step} new_stage:{stage_names[stage_index]}")
+                                log0(f"cascade:switch step:{step} new_stage:{stage_names[stage_index]} qat_lr_fraction:{args.qat_lr_fraction:.3f}")
                             else:
                                 # No QAT stage available — stop here so the optimizer cannot
                                 # drag the EMA shadow past its current optimum.
                                 stop_after_step = step
                                 log0(f"cascade:early_stop step:{step} reason:late_ema_plateau_no_qat")
+                            switch_triggered = True
+                        elif args.cascade_enabled and stage_index == 2:
+                            # QAT has plateaued — stop training so the EMA shadow
+                            # captures the best QAT weights rather than drifting.
+                            stop_after_step = step
+                            log0(f"cascade:early_stop step:{step} reason:late_qat_plateau")
                             switch_triggered = True
                     if master_process:
                         slope_summary = summarize_gain_rates(stage_eval_history, args.adaptive_eval_flatten_window)
@@ -1245,6 +1252,8 @@ def main() -> None:
 
             elapsed_ms = training_time_ms + 1000.0 * (time.perf_counter() - t0)
             scale = lr_mul(step, elapsed_ms)
+            if _QAT_ACTIVE:
+                scale *= args.qat_lr_fraction
             zero_grad_all()
             train_loss = torch.zeros((), device=device)
             for micro_step in range(grad_accum_steps):
