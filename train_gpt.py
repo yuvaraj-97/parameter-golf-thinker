@@ -66,6 +66,8 @@ class Hyperparameters:
     model_dim = int(os.environ.get("MODEL_DIM", 512))
     num_heads = int(os.environ.get("NUM_HEADS", 8))
     mlp_mult = int(os.environ.get("MLP_MULT", 2))
+    predictive_delta_strength = float(os.environ.get("PREDICTIVE_DELTA_STRENGTH", 0.5))
+    predictive_delta_clamp = float(os.environ.get("PREDICTIVE_DELTA_CLAMP", 2.0))
     tie_embeddings = bool(int(os.environ.get("TIE_EMBEDDINGS", "1")))
     rope_base = float(os.environ.get("ROPE_BASE", 10000.0))
     logit_softcap = float(os.environ.get("LOGIT_SOFTCAP", 30.0))
@@ -654,6 +656,8 @@ class GPT(nn.Module):
         num_heads: int,
         num_kv_heads: int,
         mlp_mult: int,
+        predictive_delta_strength: float,
+        predictive_delta_clamp: float,
         tie_embeddings: bool,
         tied_embed_init_std: float,
         logit_softcap: float,
@@ -666,10 +670,15 @@ class GPT(nn.Module):
         self.tie_embeddings = tie_embeddings
         self.tied_embed_init_std = tied_embed_init_std
         self.logit_softcap = logit_softcap
+        self.predictive_delta_strength = predictive_delta_strength
+        self.predictive_delta_clamp = predictive_delta_clamp
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
         self.n_recursive = num_layers
         self.shared_block = Block(model_dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init)
         self.step_embed = nn.Embedding(self.n_recursive, model_dim)
+        self.delta_norm = RMSNorm()
+        self.delta_proj = CastedLinear(model_dim, model_dim, bias=False)
+        self.delta_gain = nn.Parameter(torch.ones(model_dim, dtype=torch.float32))
         self.final_norm = RMSNorm()
         self.lm_head = None if tie_embeddings else CastedLinear(model_dim, vocab_size, bias=False)
         if self.lm_head is not None:
@@ -691,7 +700,12 @@ class GPT(nn.Module):
         for step in range(self.n_recursive):
             step_signal = self.step_embed(torch.tensor(step, device=x.device)).to(dtype=x.dtype)
             x = x + step_signal
-            x = self.shared_block(x, x0)
+            candidate = self.shared_block(x, x0)
+            delta = self.delta_proj(self.delta_norm(candidate - x))
+            if self.predictive_delta_clamp > 0.0:
+                delta = torch.clamp(delta, -self.predictive_delta_clamp, self.predictive_delta_clamp)
+            correction = self.predictive_delta_strength * torch.tanh(delta)
+            x = x + self.delta_gain.to(dtype=x.dtype)[None, None, :] * correction
 
         x = self.final_norm(x).reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
@@ -811,6 +825,8 @@ def main() -> None:
         num_heads=args.num_heads,
         num_kv_heads=args.num_kv_heads,
         mlp_mult=args.mlp_mult,
+        predictive_delta_strength=args.predictive_delta_strength,
+        predictive_delta_clamp=args.predictive_delta_clamp,
         tie_embeddings=args.tie_embeddings,
         tied_embed_init_std=args.tied_embed_init_std,
         logit_softcap=args.logit_softcap,
@@ -840,6 +856,9 @@ def main() -> None:
         for name, p in block_named_params
         if p.ndim < 2 or any(pattern in name for pattern in CONTROL_TENSOR_NAME_PATTERNS)
     ]
+    matrix_params.append(base_model.delta_proj.weight)
+    scalar_params.extend(list(base_model.delta_norm.parameters()))
+    scalar_params.append(base_model.delta_gain)
     scalar_params.append(base_model.step_embed.weight)
     token_lr = args.tied_embed_lr if args.tie_embeddings else args.embed_lr
     optimizer_tok = torch.optim.Adam(
@@ -877,6 +896,10 @@ def main() -> None:
     log0(f"world_size:{world_size} grad_accum_steps:{grad_accum_steps}")
     log0("sdp_backends:cudnn=False flash=True mem_efficient=False math=False")
     log0(f"attention_mode:gqa num_heads:{args.num_heads} num_kv_heads:{args.num_kv_heads}")
+    log0(
+        f"predictive_coding:delta_strength:{args.predictive_delta_strength:.3f} "
+        f"delta_clamp:{args.predictive_delta_clamp:.3f}"
+    )
     log0(
         f"tie_embeddings:{args.tie_embeddings} embed_lr:{token_lr} "
         f"head_lr:{args.head_lr if base_model.lm_head is not None else 0.0} "
