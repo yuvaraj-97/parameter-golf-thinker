@@ -27,13 +27,9 @@ cp "logs/${RUN_ID}_adaptive_eval.jsonl"  "$RUN_DIR/adaptive_eval.jsonl"
 cp "logs/${RUN_ID}_adaptive_eval.csv"    "$RUN_DIR/adaptive_eval.csv"
 
 # Optional files — present only when captured or training completed cleanly.
-for src dest in \
-  "logs/${RUN_ID}.console.log" "$RUN_DIR/console.log" \
-  "final_model.pt"              "$RUN_DIR/final_model.pt" \
-  "final_model.int8.ptz"        "$RUN_DIR/final_model.int8.ptz"
-do
-  [ -f "$src" ] && cp "$src" "$dest" || echo "skipping missing: $src"
-done
+[ -f "logs/${RUN_ID}.console.log" ] && cp "logs/${RUN_ID}.console.log" "$RUN_DIR/console.log" || echo "skipping missing: console.log"
+[ -f final_model.pt ]              && cp final_model.pt "$RUN_DIR/final_model.pt"              || echo "skipping missing: final_model.pt"
+[ -f final_model.int8.ptz ]        && cp final_model.int8.ptz "$RUN_DIR/final_model.int8.ptz"  || echo "skipping missing: final_model.int8.ptz"
 
 printf '# %s\n\n- Pod: %s\n- GPU: %sx %s\n- Run ID: `%s`\n' \
   "$RUN_ID" "$POD_NAME" "$GPU_COUNT" "$GPU_NAME" "$RUN_ID" > "$RUN_DIR/README.md"
