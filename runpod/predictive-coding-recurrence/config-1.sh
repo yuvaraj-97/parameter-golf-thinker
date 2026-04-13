@@ -1,6 +1,12 @@
 #!/bin/sh
 set -eu
 
+TARGET_BRANCH="predictive-coding-recurrence"
+CURRENT_BRANCH="$(git branch --show-current 2>/dev/null || true)"
+if [ "$CURRENT_BRANCH" != "$TARGET_BRANCH" ]; then
+  git checkout "$TARGET_BRANCH"
+fi
+
 export NPROC_PER_NODE="${NPROC_PER_NODE:-4}"
 export DATA_PATH="${DATA_PATH:-./data/datasets/fineweb10B_sp1024/}"
 export TOKENIZER_PATH="${TOKENIZER_PATH:-./data/tokenizers/fineweb_1024_bpe.model}"
