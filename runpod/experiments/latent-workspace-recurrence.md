@@ -28,6 +28,7 @@ Default is `4` GPUs because [config-1.sh](C:/Users/yuvar/OneDrive/Documents/GitH
 One-paste run (train + save logs/artifacts):
 
 ```bash
+git checkout latent-workspace-recurrence && \
 NPROC_PER_NODE=4 \
 LATENT_SLOTS=8 \
 ITERATIONS=5000 \
