@@ -66,6 +66,8 @@ class Hyperparameters:
     model_dim = int(os.environ.get("MODEL_DIM", 512))
     num_heads = int(os.environ.get("NUM_HEADS", 8))
     mlp_mult = int(os.environ.get("MLP_MULT", 2))
+    compression_interval = int(os.environ.get("COMPRESSION_INTERVAL", 3))
+    compression_groups = int(os.environ.get("COMPRESSION_GROUPS", 8))
     tie_embeddings = bool(int(os.environ.get("TIE_EMBEDDINGS", "1")))
     rope_base = float(os.environ.get("ROPE_BASE", 10000.0))
     logit_softcap = float(os.environ.get("LOGIT_SOFTCAP", 30.0))
@@ -645,6 +647,30 @@ class Block(nn.Module):
         return x
 
 
+class HierarchicalCompressor(nn.Module):
+    def __init__(self, dim: int, groups: int):
+        super().__init__()
+        self.groups = groups
+        self.norm = RMSNorm()
+        self.compress = CastedLinear(dim, dim, bias=False)
+        self.decompress = CastedLinear(dim, dim, bias=False)
+
+    def forward(self, x: Tensor) -> Tensor:
+        bsz, seqlen, dim = x.shape
+        groups = max(1, min(self.groups, seqlen))
+        chunk = max(seqlen // groups, 1)
+        usable = (seqlen // chunk) * chunk
+        if usable <= 0:
+            return x
+        pooled = x[:, :usable, :].reshape(bsz, usable // chunk, chunk, dim).mean(dim=2)
+        compressed = self.compress(self.norm(pooled))
+        expanded = compressed.repeat_interleave(chunk, dim=1)
+        if usable < seqlen:
+            tail = expanded[:, -1:, :].expand(-1, seqlen - usable, -1)
+            expanded = torch.cat((expanded, tail), dim=1)
+        return x + self.decompress(self.norm(expanded))
+
+
 class GPT(nn.Module):
     def __init__(
         self,
@@ -654,6 +680,8 @@ class GPT(nn.Module):
         num_heads: int,
         num_kv_heads: int,
         mlp_mult: int,
+        compression_interval: int,
+        compression_groups: int,
         tie_embeddings: bool,
         tied_embed_init_std: float,
         logit_softcap: float,
@@ -663,13 +691,19 @@ class GPT(nn.Module):
         super().__init__()
         if logit_softcap <= 0.0:
             raise ValueError(f"logit_softcap must be positive, got {logit_softcap}")
+        if compression_interval <= 0:
+            raise ValueError(f"compression_interval must be positive, got {compression_interval}")
+        if compression_groups <= 0:
+            raise ValueError(f"compression_groups must be positive, got {compression_groups}")
         self.tie_embeddings = tie_embeddings
         self.tied_embed_init_std = tied_embed_init_std
         self.logit_softcap = logit_softcap
+        self.compression_interval = compression_interval
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
         self.n_recursive = num_layers
         self.shared_block = Block(model_dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init)
         self.step_embed = nn.Embedding(self.n_recursive, model_dim)
+        self.compressor = HierarchicalCompressor(model_dim, compression_groups)
         self.final_norm = RMSNorm()
         self.lm_head = None if tie_embeddings else CastedLinear(model_dim, vocab_size, bias=False)
         if self.lm_head is not None:
@@ -692,6 +726,8 @@ class GPT(nn.Module):
             step_signal = self.step_embed(torch.tensor(step, device=x.device)).to(dtype=x.dtype)
             x = x + step_signal
             x = self.shared_block(x, x0)
+            if (step + 1) % self.compression_interval == 0:
+                x = self.compressor(x)
 
         x = self.final_norm(x).reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
@@ -811,6 +847,8 @@ def main() -> None:
         num_heads=args.num_heads,
         num_kv_heads=args.num_kv_heads,
         mlp_mult=args.mlp_mult,
+        compression_interval=args.compression_interval,
+        compression_groups=args.compression_groups,
         tie_embeddings=args.tie_embeddings,
         tied_embed_init_std=args.tied_embed_init_std,
         logit_softcap=args.logit_softcap,
@@ -840,6 +878,9 @@ def main() -> None:
         for name, p in block_named_params
         if p.ndim < 2 or any(pattern in name for pattern in CONTROL_TENSOR_NAME_PATTERNS)
     ]
+    matrix_params.append(base_model.compressor.compress.weight)
+    matrix_params.append(base_model.compressor.decompress.weight)
+    scalar_params.extend(list(base_model.compressor.norm.parameters()))
     scalar_params.append(base_model.step_embed.weight)
     token_lr = args.tied_embed_lr if args.tie_embeddings else args.embed_lr
     optimizer_tok = torch.optim.Adam(
@@ -877,6 +918,10 @@ def main() -> None:
     log0(f"world_size:{world_size} grad_accum_steps:{grad_accum_steps}")
     log0("sdp_backends:cudnn=False flash=True mem_efficient=False math=False")
     log0(f"attention_mode:gqa num_heads:{args.num_heads} num_kv_heads:{args.num_kv_heads}")
+    log0(
+        f"hierarchical_compression:interval:{args.compression_interval} "
+        f"groups:{args.compression_groups}"
+    )
     log0(
         f"tie_embeddings:{args.tie_embeddings} embed_lr:{token_lr} "
         f"head_lr:{args.head_lr if base_model.lm_head is not None else 0.0} "
