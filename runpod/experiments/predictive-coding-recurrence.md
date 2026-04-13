@@ -1,6 +1,6 @@
 # Predictive-Coding Recurrence
 
-Branch: `codex/predictive-coding-recurrence`
+Branch: `predictive-coding-recurrence`
 
 ## Thesis
 
