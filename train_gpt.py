@@ -359,7 +359,8 @@ def detect_flattening(eval_history: list[dict[str, float]], flatten_window: int,
         return False
     best_rate = max(gain_rates)
     if best_rate <= 0:
-        return False
+        # Never improved in this stage — already past-plateau (or degrading).
+        return True
     recent_rate = sum(gain_rates[-flatten_window:]) / flatten_window
     return recent_rate <= best_rate * flatten_ratio
 
