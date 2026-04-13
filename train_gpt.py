@@ -66,6 +66,7 @@ class Hyperparameters:
     model_dim = int(os.environ.get("MODEL_DIM", 512))
     num_heads = int(os.environ.get("NUM_HEADS", 8))
     mlp_mult = int(os.environ.get("MLP_MULT", 2))
+    latent_slots = int(os.environ.get("LATENT_SLOTS", 8))
     tie_embeddings = bool(int(os.environ.get("TIE_EMBEDDINGS", "1")))
     rope_base = float(os.environ.get("ROPE_BASE", 10000.0))
     logit_softcap = float(os.environ.get("LOGIT_SOFTCAP", 30.0))
@@ -645,6 +646,29 @@ class Block(nn.Module):
         return x
 
 
+class WorkspaceState(nn.Module):
+    def __init__(self, dim: int, latent_slots: int):
+        super().__init__()
+        self.latent_slots = latent_slots
+        self.seed = nn.Parameter(torch.randn(latent_slots, dim, dtype=torch.float32) * 0.02)
+        self.slot_embed = nn.Embedding(latent_slots, dim)
+        self.read_proj = CastedLinear(dim, dim, bias=False)
+        self.write_proj = CastedLinear(dim, dim, bias=False)
+        self.self_update = CastedLinear(dim, dim, bias=False)
+        self.norm = RMSNorm()
+
+    def forward(self, x: Tensor, workspace: Tensor | None) -> tuple[Tensor, Tensor]:
+        if workspace is None:
+            slot_ids = torch.arange(self.latent_slots, device=x.device)
+            workspace = self.seed.to(dtype=x.dtype)[None, :, :] + self.slot_embed(slot_ids).to(dtype=x.dtype)[None, :, :]
+            workspace = workspace.expand(x.size(0), -1, -1).contiguous()
+        pooled_text = x.mean(dim=1, keepdim=True)
+        workspace = workspace + self.read_proj(pooled_text.expand(-1, self.latent_slots, -1))
+        workspace = workspace + self.self_update(self.norm(workspace))
+        workspace_signal = self.write_proj(self.norm(workspace).mean(dim=1, keepdim=True))
+        return x + workspace_signal, workspace
+
+
 class GPT(nn.Module):
     def __init__(
         self,
@@ -654,6 +678,7 @@ class GPT(nn.Module):
         num_heads: int,
         num_kv_heads: int,
         mlp_mult: int,
+        latent_slots: int,
         tie_embeddings: bool,
         tied_embed_init_std: float,
         logit_softcap: float,
@@ -670,6 +695,7 @@ class GPT(nn.Module):
         self.n_recursive = num_layers
         self.shared_block = Block(model_dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init)
         self.step_embed = nn.Embedding(self.n_recursive, model_dim)
+        self.workspace = WorkspaceState(model_dim, latent_slots)
         self.final_norm = RMSNorm()
         self.lm_head = None if tie_embeddings else CastedLinear(model_dim, vocab_size, bias=False)
         if self.lm_head is not None:
@@ -687,10 +713,12 @@ class GPT(nn.Module):
         x = self.tok_emb(input_ids)
         x = F.rms_norm(x, (x.size(-1),))
         x0 = x
+        workspace = None
 
         for step in range(self.n_recursive):
             step_signal = self.step_embed(torch.tensor(step, device=x.device)).to(dtype=x.dtype)
             x = x + step_signal
+            x, workspace = self.workspace(x, workspace)
             x = self.shared_block(x, x0)
 
         x = self.final_norm(x).reshape(-1, x.size(-1))
@@ -811,6 +839,7 @@ def main() -> None:
         num_heads=args.num_heads,
         num_kv_heads=args.num_kv_heads,
         mlp_mult=args.mlp_mult,
+        latent_slots=args.latent_slots,
         tie_embeddings=args.tie_embeddings,
         tied_embed_init_std=args.tied_embed_init_std,
         logit_softcap=args.logit_softcap,
@@ -840,6 +869,9 @@ def main() -> None:
         for name, p in block_named_params
         if p.ndim < 2 or any(pattern in name for pattern in CONTROL_TENSOR_NAME_PATTERNS)
     ]
+    workspace_named_params = list(base_model.workspace.named_parameters())
+    matrix_params.extend(p for _, p in workspace_named_params if p.ndim == 2)
+    scalar_params.extend(p for _, p in workspace_named_params if p.ndim < 2)
     scalar_params.append(base_model.step_embed.weight)
     token_lr = args.tied_embed_lr if args.tie_embeddings else args.embed_lr
     optimizer_tok = torch.optim.Adam(
@@ -877,6 +909,7 @@ def main() -> None:
     log0(f"world_size:{world_size} grad_accum_steps:{grad_accum_steps}")
     log0("sdp_backends:cudnn=False flash=True mem_efficient=False math=False")
     log0(f"attention_mode:gqa num_heads:{args.num_heads} num_kv_heads:{args.num_kv_heads}")
+    log0(f"latent_workspace:slots:{args.latent_slots}")
     log0(
         f"tie_embeddings:{args.tie_embeddings} embed_lr:{token_lr} "
         f"head_lr:{args.head_lr if base_model.lm_head is not None else 0.0} "
