@@ -27,6 +27,7 @@ Default is `4` GPUs because [config-1.sh](C:/Users/yuvar/OneDrive/Documents/GitH
 One-paste run (train + save logs/artifacts):
 
 ```bash
+git checkout hierarchical-compression-recurrence && \
 NPROC_PER_NODE=4 \
 COMPRESSION_INTERVAL=3 \
 COMPRESSION_GROUPS=8 \
