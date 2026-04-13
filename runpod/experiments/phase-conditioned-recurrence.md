@@ -1,6 +1,6 @@
 # Phase-Conditioned Recurrence
 
-Branch: `codex/phase-conditioned-recurrence`
+Branch: `phase-conditioned-recurrence`
 
 ## Thesis
 
