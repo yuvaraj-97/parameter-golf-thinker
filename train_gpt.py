@@ -66,6 +66,8 @@ class Hyperparameters:
     model_dim = int(os.environ.get("MODEL_DIM", 512))
     num_heads = int(os.environ.get("NUM_HEADS", 8))
     mlp_mult = int(os.environ.get("MLP_MULT", 2))
+    phase_count = int(os.environ.get("PHASE_COUNT", 4))
+    phase_mod_strength = float(os.environ.get("PHASE_MOD_STRENGTH", 0.2))
     tie_embeddings = bool(int(os.environ.get("TIE_EMBEDDINGS", "1")))
     rope_base = float(os.environ.get("ROPE_BASE", 10000.0))
     logit_softcap = float(os.environ.get("LOGIT_SOFTCAP", 30.0))
@@ -636,12 +638,18 @@ class Block(nn.Module):
         self.mlp_scale = nn.Parameter(torch.ones(dim, dtype=torch.float32))
         self.resid_mix = nn.Parameter(torch.stack((torch.ones(dim), torch.zeros(dim))).float())
 
-    def forward(self, x: Tensor, x0: Tensor) -> Tensor:
+    def forward(self, x: Tensor, x0: Tensor, phase_mod: Tensor | None = None) -> Tensor:
         mix = self.resid_mix.to(dtype=x.dtype)
         x = mix[0][None, None, :] * x + mix[1][None, None, :] * x0
         attn_out = self.attn(self.attn_norm(x))
-        x = x + self.attn_scale.to(dtype=x.dtype)[None, None, :] * attn_out
-        x = x + self.mlp_scale.to(dtype=x.dtype)[None, None, :] * self.mlp(self.mlp_norm(x))
+        attn_scale = self.attn_scale.to(dtype=x.dtype)
+        mlp_scale = self.mlp_scale.to(dtype=x.dtype)
+        if phase_mod is not None:
+            phase_mod = phase_mod.to(dtype=x.dtype)
+            attn_scale = attn_scale * (1.0 + phase_mod)
+            mlp_scale = mlp_scale * (1.0 - phase_mod)
+        x = x + attn_scale[None, None, :] * attn_out
+        x = x + mlp_scale[None, None, :] * self.mlp(self.mlp_norm(x))
         return x
 
 
@@ -654,6 +662,8 @@ class GPT(nn.Module):
         num_heads: int,
         num_kv_heads: int,
         mlp_mult: int,
+        phase_count: int,
+        phase_mod_strength: float,
         tie_embeddings: bool,
         tied_embed_init_std: float,
         logit_softcap: float,
@@ -663,13 +673,18 @@ class GPT(nn.Module):
         super().__init__()
         if logit_softcap <= 0.0:
             raise ValueError(f"logit_softcap must be positive, got {logit_softcap}")
+        if phase_count <= 0:
+            raise ValueError(f"phase_count must be positive, got {phase_count}")
         self.tie_embeddings = tie_embeddings
         self.tied_embed_init_std = tied_embed_init_std
         self.logit_softcap = logit_softcap
+        self.phase_count = phase_count
+        self.phase_mod_strength = phase_mod_strength
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
         self.n_recursive = num_layers
         self.shared_block = Block(model_dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init)
         self.step_embed = nn.Embedding(self.n_recursive, model_dim)
+        self.phase_embed = nn.Embedding(self.phase_count, model_dim)
         self.final_norm = RMSNorm()
         self.lm_head = None if tie_embeddings else CastedLinear(model_dim, vocab_size, bias=False)
         if self.lm_head is not None:
@@ -690,8 +705,10 @@ class GPT(nn.Module):
 
         for step in range(self.n_recursive):
             step_signal = self.step_embed(torch.tensor(step, device=x.device)).to(dtype=x.dtype)
+            phase_id = torch.tensor(step % self.phase_count, device=x.device)
+            phase_mod = torch.tanh(self.phase_embed(phase_id)) * self.phase_mod_strength
             x = x + step_signal
-            x = self.shared_block(x, x0)
+            x = self.shared_block(x, x0, phase_mod=phase_mod)
 
         x = self.final_norm(x).reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
@@ -811,6 +828,8 @@ def main() -> None:
         num_heads=args.num_heads,
         num_kv_heads=args.num_kv_heads,
         mlp_mult=args.mlp_mult,
+        phase_count=args.phase_count,
+        phase_mod_strength=args.phase_mod_strength,
         tie_embeddings=args.tie_embeddings,
         tied_embed_init_std=args.tied_embed_init_std,
         logit_softcap=args.logit_softcap,
@@ -841,6 +860,7 @@ def main() -> None:
         if p.ndim < 2 or any(pattern in name for pattern in CONTROL_TENSOR_NAME_PATTERNS)
     ]
     scalar_params.append(base_model.step_embed.weight)
+    scalar_params.append(base_model.phase_embed.weight)
     token_lr = args.tied_embed_lr if args.tie_embeddings else args.embed_lr
     optimizer_tok = torch.optim.Adam(
         [{"params": [base_model.tok_emb.weight], "lr": token_lr, "base_lr": token_lr}],
@@ -877,6 +897,7 @@ def main() -> None:
     log0(f"world_size:{world_size} grad_accum_steps:{grad_accum_steps}")
     log0("sdp_backends:cudnn=False flash=True mem_efficient=False math=False")
     log0(f"attention_mode:gqa num_heads:{args.num_heads} num_kv_heads:{args.num_kv_heads}")
+    log0(f"phase_conditioning:phase_count:{args.phase_count} strength:{args.phase_mod_strength:.3f}")
     log0(
         f"tie_embeddings:{args.tie_embeddings} embed_lr:{token_lr} "
         f"head_lr:{args.head_lr if base_model.lm_head is not None else 0.0} "
