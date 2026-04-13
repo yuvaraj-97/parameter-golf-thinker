@@ -22,11 +22,22 @@ Shared-block recurrence often underuses depth because each pass behaves too simi
 
 ## Suggested First Run
 
+Default is `4` GPUs because [config-1.sh](C:/Users/yuvar/OneDrive/Documents/GitHub/parameter-golf-thinker/runpod/phase-conditioned-recurrence/config-1.sh) sets `NPROC_PER_NODE=4` unless overridden.
+
+One-paste run (train + save logs/artifacts):
+
 ```bash
-RUN_ID=phase_conditioned_smoke \
+NPROC_PER_NODE=4 \
 PHASE_COUNT=4 \
 PHASE_MOD_STRENGTH=0.2 \
-ITERATIONS=1000 \
-VAL_LOSS_EVERY=200 \
-torchrun --standalone --nproc_per_node=1 train_gpt.py
+ITERATIONS=5000 \
+VAL_LOSS_EVERY=500 \
+bash runpod/phase-conditioned-recurrence/config-1.sh
 ```
+
+This produces:
+- `logs/<RUN_ID>.txt`
+- `logs/<RUN_ID>.console.log`
+- `logs/<RUN_ID>_adaptive_eval.jsonl`
+- `logs/<RUN_ID>_adaptive_eval.csv`
+- `runpod/experiments/<date>-<gpu>-<count>gpu/<RUN_ID>/...` via `./save.sh`
