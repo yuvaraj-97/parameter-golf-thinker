@@ -1,6 +1,6 @@
 # Hierarchical Compression Recurrence
 
-Branch: `codex/hierarchical-compression-recurrence`
+Branch: `hierarchical-compression-recurrence`
 
 ## Thesis
 
