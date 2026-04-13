@@ -7,8 +7,10 @@ Hard stop: To keep readable for newcomers, let's make sure `train_gpt.py` and `t
 from __future__ import annotations
 
 import copy
+import csv
 import glob
 import io
+import json
 import math
 import os
 import random
@@ -788,6 +790,88 @@ def main() -> None:
     )
     log0("=" * 100, console=False)
 
+    adaptive_eval_jsonl_path = Path(f"logs/{args.run_id}_adaptive_eval.jsonl")
+    adaptive_eval_csv_path = Path(f"logs/{args.run_id}_adaptive_eval.csv")
+    adaptive_eval_fields = [
+        "run_id",
+        "step",
+        "train_time_ms",
+        "val_loss",
+        "val_bpb",
+        "step_avg_ms",
+        "dense_band_center_step",
+        "flatten_step",
+        "stage",
+        "switch_triggered",
+        "delta_step",
+        "delta_time_ms",
+        "gain_bpb",
+        "gain_per_step",
+        "gain_per_second",
+        "recent_gain_per_step",
+        "recent_gain_per_second",
+    ]
+    adaptive_eval_history: list[dict[str, float | int | str | bool]] = []
+    gain_per_step_history: list[float] = []
+    gain_per_second_history: list[float] = []
+
+    if master_process:
+        adaptive_eval_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+        adaptive_eval_jsonl_path.write_text("", encoding="utf-8")
+        with adaptive_eval_csv_path.open("w", encoding="utf-8", newline="") as f:
+            csv.DictWriter(f, fieldnames=adaptive_eval_fields).writeheader()
+
+    def log_adaptive_eval(step: int, train_time_ms: float, val_loss: float, val_bpb: float) -> None:
+        if not master_process:
+            return
+        prev = adaptive_eval_history[-1] if adaptive_eval_history else None
+        prev_step = int(prev["step"]) if prev is not None else step
+        prev_time = float(prev["train_time_ms"]) if prev is not None else train_time_ms
+        prev_bpb = float(prev["val_bpb"]) if prev is not None else val_bpb
+        delta_step = float(step - prev_step) if prev is not None else 0.0
+        delta_time_ms = float(train_time_ms - prev_time) if prev is not None else 0.0
+        gain_bpb = float(prev_bpb - val_bpb) if prev is not None else 0.0
+        gain_per_step = gain_bpb / delta_step if delta_step > 0 else 0.0
+        gain_per_second = gain_bpb / (delta_time_ms / 1000.0) if delta_time_ms > 0 else 0.0
+        if delta_step > 0:
+            gain_per_step_history.append(gain_per_step)
+            gain_per_second_history.append(gain_per_second)
+        recent_window = 3
+        recent_gain_per_step = (
+            sum(gain_per_step_history[-recent_window:]) / min(recent_window, len(gain_per_step_history))
+            if gain_per_step_history
+            else 0.0
+        )
+        recent_gain_per_second = (
+            sum(gain_per_second_history[-recent_window:]) / min(recent_window, len(gain_per_second_history))
+            if gain_per_second_history
+            else 0.0
+        )
+        row: dict[str, float | int | str | bool] = {
+            "run_id": args.run_id,
+            "step": step,
+            "train_time_ms": round(train_time_ms, 3),
+            "val_loss": round(val_loss, 8),
+            "val_bpb": round(val_bpb, 8),
+            "step_avg_ms": round(train_time_ms / max(step, 1), 4),
+            "dense_band_center_step": 0,
+            "flatten_step": 0,
+            "stage": "base",
+            "switch_triggered": False,
+            "delta_step": delta_step,
+            "delta_time_ms": delta_time_ms,
+            "gain_bpb": gain_bpb,
+            "gain_per_step": gain_per_step,
+            "gain_per_second": gain_per_second,
+            "recent_gain_per_step": recent_gain_per_step,
+            "recent_gain_per_second": recent_gain_per_second,
+        }
+        adaptive_eval_history.append(row)
+        with adaptive_eval_jsonl_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, sort_keys=True) + "\n")
+        with adaptive_eval_csv_path.open("a", encoding="utf-8", newline="") as f:
+            csv.DictWriter(f, fieldnames=adaptive_eval_fields).writerow(row)
+
     # -----------------------------
     # TOKENIZER + VALIDATION METRIC SETUP
     # -----------------------------
@@ -996,6 +1080,7 @@ def main() -> None:
                 f"step:{step}/{args.iterations} val_loss:{val_loss:.4f} val_bpb:{val_bpb:.4f} "
                 f"train_time:{training_time_ms:.0f}ms step_avg:{training_time_ms / max(step, 1):.2f}ms"
             )
+            log_adaptive_eval(step, training_time_ms, val_loss, val_bpb)
             torch.cuda.synchronize()
             t0 = time.perf_counter()
 
@@ -1120,6 +1205,18 @@ def main() -> None:
         f"eval_time:{1000.0 * (time.perf_counter() - t_qeval):.0f}ms"
     )
     log0(f"final_int8_zlib_roundtrip_exact val_loss:{q_val_loss:.8f} val_bpb:{q_val_bpb:.8f}")
+
+    if master_process:
+        run_end = {
+            "event": "run_end",
+            "interrupted": stop_after_step is not None and step < args.iterations,
+            "run_id": args.run_id,
+            "stage": "base",
+            "step": step,
+            "train_time_ms": round(training_time_ms, 3),
+        }
+        with adaptive_eval_jsonl_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(run_end, sort_keys=True) + "\n")
 
     if distributed:
         dist.destroy_process_group()
