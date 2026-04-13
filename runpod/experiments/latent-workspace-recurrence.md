@@ -1,6 +1,6 @@
 # Latent Workspace Recurrence
 
-Branch: `codex/latent-workspace-recurrence`
+Branch: `latent-workspace-recurrence`
 
 ## Thesis
 
