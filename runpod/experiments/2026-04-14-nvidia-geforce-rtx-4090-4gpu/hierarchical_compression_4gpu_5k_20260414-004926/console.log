@@ -1,0 +1,77 @@
+W0414 00:49:30.582000 380 torch/distributed/run.py:803] 
+W0414 00:49:30.582000 380 torch/distributed/run.py:803] *****************************************
+W0414 00:49:30.582000 380 torch/distributed/run.py:803] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+W0414 00:49:30.582000 380 torch/distributed/run.py:803] *****************************************
+logs/hierarchical_compression_4gpu_5k_20260414-004926.txt
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+train_loader:dataset:fineweb10B_sp1024 train_shards:1
+val_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_val_*.bin tokens:62021632
+model_params:2890248
+world_size:4 grad_accum_steps:2
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:8 num_kv_heads:4
+hierarchical_compression:interval:3 groups:8
+tie_embeddings:True embed_lr:0.05 head_lr:0.0 matrix_lr:0.04 scalar_lr:0.04
+train_batch_tokens:524288 train_seq_len:1024 iterations:5000 warmup_steps:20 max_wallclock_seconds:0.000
+seed:1337
+warmup_step:1/20
+warmup_step:2/20
+warmup_step:3/20
+warmup_step:4/20
+warmup_step:5/20
+warmup_step:6/20
+warmup_step:7/20
+warmup_step:8/20
+warmup_step:9/20
+warmup_step:10/20
+warmup_step:11/20
+warmup_step:12/20
+warmup_step:13/20
+warmup_step:14/20
+warmup_step:15/20
+warmup_step:16/20
+warmup_step:17/20
+warmup_step:18/20
+warmup_step:19/20
+warmup_step:20/20
+step:0/5000 val_loss:6.9326 val_bpb:4.1059 train_time:0ms step_avg:0.02ms
+step:1/5000 train_loss:6.9326 train_time:84ms step_avg:84.47ms
+step:2/5000 train_loss:13.2364 train_time:342ms step_avg:171.14ms
+step:3/5000 train_loss:15.5471 train_time:590ms step_avg:196.73ms
+step:4/5000 train_loss:12.2480 train_time:840ms step_avg:209.92ms
+step:5/5000 train_loss:9.8239 train_time:1090ms step_avg:218.09ms
+step:6/5000 train_loss:8.5742 train_time:1333ms step_avg:222.10ms
+step:7/5000 train_loss:8.1252 train_time:1583ms step_avg:226.16ms
+step:8/5000 train_loss:8.1615 train_time:1833ms step_avg:229.12ms
+step:9/5000 train_loss:7.9625 train_time:2083ms step_avg:231.50ms
+step:10/5000 train_loss:7.3231 train_time:2333ms step_avg:233.30ms
+step:400/5000 train_loss:2.6563 train_time:99356ms step_avg:248.39ms
+step:500/5000 val_loss:2.2976 val_bpb:1.3608 train_time:124520ms step_avg:249.04ms
+step:800/5000 train_loss:1.1974 train_time:198683ms step_avg:248.35ms
+step:1000/5000 val_loss:0.6287 val_bpb:0.3724 train_time:248409ms step_avg:248.41ms
+step:1200/5000 train_loss:0.3992 train_time:297939ms step_avg:248.28ms
+step:1500/5000 val_loss:0.3246 val_bpb:0.1922 train_time:372640ms step_avg:248.43ms
+step:1600/5000 train_loss:0.3372 train_time:397298ms step_avg:248.31ms
+step:2000/5000 train_loss:0.2541 train_time:496347ms step_avg:248.17ms
+step:2000/5000 val_loss:0.2599 val_bpb:0.1539 train_time:496506ms step_avg:248.25ms
+step:2400/5000 train_loss:0.1855 train_time:595747ms step_avg:248.23ms
+step:2500/5000 val_loss:0.2138 val_bpb:0.1266 train_time:620760ms step_avg:248.30ms
+step:2800/5000 train_loss:0.2055 train_time:694633ms step_avg:248.08ms
+step:3000/5000 val_loss:0.1787 val_bpb:0.1059 train_time:743863ms step_avg:247.95ms
+step:3200/5000 train_loss:0.1879 train_time:793260ms step_avg:247.89ms
+step:3500/5000 val_loss:0.1599 val_bpb:0.0947 train_time:867981ms step_avg:247.99ms
+step:3600/5000 train_loss:0.1634 train_time:892695ms step_avg:247.97ms
+step:4000/5000 train_loss:0.1264 train_time:991983ms step_avg:248.00ms
+step:4000/5000 val_loss:0.1213 val_bpb:0.0718 train_time:992146ms step_avg:248.04ms
+step:4400/5000 train_loss:0.0845 train_time:1090909ms step_avg:247.93ms
+step:4500/5000 val_loss:0.0822 val_bpb:0.0487 train_time:1115993ms step_avg:248.00ms
+step:4800/5000 train_loss:0.0684 train_time:1190533ms step_avg:248.03ms
+step:5000/5000 val_loss:0.0587 val_bpb:0.0348 train_time:1240114ms step_avg:248.02ms
+peak memory allocated: 10521 MiB reserved: 11136 MiB
+Serialized model: 10509321 bytes
+Code size: 53304 bytes
+Total submission size: 10562625 bytes
+Serialized model int8+zlib: 2590422 bytes (payload:2911264 raw_torch:2918622 payload_ratio:3.61x)
+Total submission size int8+zlib: 2643726 bytes
+final_int8_zlib_roundtrip val_loss:0.0789 val_bpb:0.0467 eval_time:7975ms
+final_int8_zlib_roundtrip_exact val_loss:0.07885950 val_bpb:0.04670504
