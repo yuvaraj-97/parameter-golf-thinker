@@ -661,15 +661,15 @@ class HierarchicalCompressor(nn.Module):
         bsz, seqlen, dim = x.shape
         groups = max(1, min(self.groups, seqlen))
         chunk = max(seqlen // groups, 1)
-        usable = (seqlen // chunk) * chunk
-        if usable <= 0:
-            return x
-        pooled = x[:, :usable, :].reshape(bsz, usable // chunk, chunk, dim).mean(dim=2)
+        # Build chunk summaries from prefix means at each chunk start so every
+        # summary depends only on tokens at or before that start index.
+        chunk_starts = torch.arange(0, seqlen, chunk, device=x.device)
+        prefix = x.cumsum(dim=1)
+        denom = torch.arange(1, seqlen + 1, device=x.device, dtype=x.dtype).view(1, seqlen, 1)
+        prefix_mean = prefix / denom
+        pooled = prefix_mean[:, chunk_starts, :]
         compressed = self.compress(self.norm(pooled))
-        expanded = compressed.repeat_interleave(chunk, dim=1)
-        if usable < seqlen:
-            tail = expanded[:, -1:, :].expand(-1, seqlen - usable, -1)
-            expanded = torch.cat((expanded, tail), dim=1)
+        expanded = compressed.repeat_interleave(chunk, dim=1)[:, :seqlen, :]
         return x + self.decompress(self.norm(expanded))
 
 
