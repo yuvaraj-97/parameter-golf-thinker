@@ -1,0 +1,77 @@
+W0414 00:54:11.542000 293 torch/distributed/run.py:803] 
+W0414 00:54:11.542000 293 torch/distributed/run.py:803] *****************************************
+W0414 00:54:11.542000 293 torch/distributed/run.py:803] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+W0414 00:54:11.542000 293 torch/distributed/run.py:803] *****************************************
+logs/phase_conditioned_4gpu_5k_20260414-005410.txt
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+train_loader:dataset:fineweb10B_sp1024 train_shards:1
+val_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_val_*.bin tokens:62021632
+model_params:2368008
+world_size:4 grad_accum_steps:2
+sdp_backends:cudnn=False flash=True mem_efficient=False math=False
+attention_mode:gqa num_heads:8 num_kv_heads:4
+phase_conditioning:phase_count:4 strength:0.200
+tie_embeddings:True embed_lr:0.05 head_lr:0.0 matrix_lr:0.04 scalar_lr:0.04
+train_batch_tokens:524288 train_seq_len:1024 iterations:5000 warmup_steps:20 max_wallclock_seconds:0.000
+seed:1337
+warmup_step:1/20
+warmup_step:2/20
+warmup_step:3/20
+warmup_step:4/20
+warmup_step:5/20
+warmup_step:6/20
+warmup_step:7/20
+warmup_step:8/20
+warmup_step:9/20
+warmup_step:10/20
+warmup_step:11/20
+warmup_step:12/20
+warmup_step:13/20
+warmup_step:14/20
+warmup_step:15/20
+warmup_step:16/20
+warmup_step:17/20
+warmup_step:18/20
+warmup_step:19/20
+warmup_step:20/20
+step:0/5000 val_loss:6.9348 val_bpb:4.1072 train_time:0ms step_avg:0.01ms
+step:1/5000 train_loss:6.9355 train_time:108ms step_avg:107.72ms
+step:2/5000 train_loss:13.3663 train_time:418ms step_avg:209.14ms
+step:3/5000 train_loss:15.8146 train_time:736ms step_avg:245.24ms
+step:4/5000 train_loss:12.7000 train_time:1053ms step_avg:263.36ms
+step:5/5000 train_loss:10.1539 train_time:1373ms step_avg:274.54ms
+step:6/5000 train_loss:8.7815 train_time:1692ms step_avg:281.99ms
+step:7/5000 train_loss:8.1277 train_time:2012ms step_avg:287.37ms
+step:8/5000 train_loss:7.9966 train_time:2331ms step_avg:291.34ms
+step:9/5000 train_loss:7.6526 train_time:2650ms step_avg:294.40ms
+step:10/5000 train_loss:7.1209 train_time:2969ms step_avg:296.87ms
+step:400/5000 train_loss:2.8486 train_time:128664ms step_avg:321.66ms
+step:500/5000 val_loss:2.8077 val_bpb:1.6629 train_time:161163ms step_avg:322.33ms
+step:800/5000 train_loss:2.5983 train_time:257750ms step_avg:322.19ms
+step:1000/5000 val_loss:2.6725 val_bpb:1.5828 train_time:322585ms step_avg:322.58ms
+step:1200/5000 train_loss:2.5485 train_time:386939ms step_avg:322.45ms
+step:1500/5000 val_loss:2.6251 val_bpb:1.5547 train_time:484050ms step_avg:322.70ms
+step:1600/5000 train_loss:2.6530 train_time:516149ms step_avg:322.59ms
+step:2000/5000 train_loss:2.6269 train_time:645491ms step_avg:322.75ms
+step:2000/5000 val_loss:2.5951 val_bpb:1.5370 train_time:645720ms step_avg:322.86ms
+step:2400/5000 train_loss:2.5424 train_time:774838ms step_avg:322.85ms
+step:2500/5000 val_loss:2.5805 val_bpb:1.5283 train_time:807419ms step_avg:322.97ms
+step:2800/5000 train_loss:2.6605 train_time:904253ms step_avg:322.95ms
+step:3000/5000 val_loss:2.5662 val_bpb:1.5198 train_time:969170ms step_avg:323.06ms
+step:3200/5000 train_loss:2.5021 train_time:1033641ms step_avg:323.01ms
+step:3500/5000 val_loss:2.5566 val_bpb:1.5141 train_time:1130929ms step_avg:323.12ms
+step:3600/5000 train_loss:2.5864 train_time:1163059ms step_avg:323.07ms
+step:4000/5000 train_loss:2.5470 train_time:1292391ms step_avg:323.10ms
+step:4000/5000 val_loss:2.5413 val_bpb:1.5051 train_time:1292620ms step_avg:323.15ms
+step:4400/5000 train_loss:2.4649 train_time:1421677ms step_avg:323.11ms
+step:4500/5000 val_loss:2.5163 val_bpb:1.4903 train_time:1454230ms step_avg:323.16ms
+step:4800/5000 train_loss:2.4056 train_time:1551003ms step_avg:323.13ms
+step:5000/5000 val_loss:2.4903 val_bpb:1.4749 train_time:1615950ms step_avg:323.19ms
+peak memory allocated: 10193 MiB reserved: 10210 MiB
+Serialized model: 8415816 bytes
+Code size: 52361 bytes
+Total submission size: 8468177 bytes
+Serialized model int8+zlib: 2156486 bytes (payload:2389024 raw_torch:2395559 payload_ratio:3.52x)
+Total submission size int8+zlib: 2208847 bytes
+final_int8_zlib_roundtrip val_loss:2.5040 val_bpb:1.4830 eval_time:11574ms
+final_int8_zlib_roundtrip_exact val_loss:2.50397521 val_bpb:1.48299516
